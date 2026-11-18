@@ -68,6 +68,22 @@ export function providerForScheduled(env: Env): OAuthProvider<Env> {
   return providerForOrigin(origin, env)
 }
 
+const PURGE_CURSOR_KEY = 'purge-cursor'
+
+/**
+ * 分批清理过期的 OAuth grant 与 token。
+ *
+ * 1.2 起 purgeExpiredData 未扫完时会返回 cursor；不持久化它的话，每次 cron
+ * 都从头重扫，超过 batchSize 的那部分永远清不到。
+ */
+export async function purgeExpiredOAuthData(env: Env): Promise<void> {
+  if (!env.OAUTH_KV) return
+  const cursor = (await env.OAUTH_KV.get(PURGE_CURSOR_KEY)) ?? undefined
+  const result = await providerForScheduled(env).purgeExpiredData(env, { batchSize: 100, cursor })
+  if (result.cursor) await env.OAUTH_KV.put(PURGE_CURSOR_KEY, result.cursor)
+  else await env.OAUTH_KV.delete(PURGE_CURSOR_KEY)
+}
+
 function providerForOrigin(origin: string, env: Env): OAuthProvider<Env> {
   const mcpResource = `${origin}/mcp`
   return new OAuthProvider<Env>({
@@ -82,16 +98,16 @@ function providerForOrigin(origin: string, env: Env): OAuthProvider<Env> {
     tokenEndpoint: `${origin}/oauth/token`,
     clientRegistrationEndpoint: `${origin}/oauth/register`,
     scopesSupported: [...MCP_SUPPORTED_SCOPES],
+    // 1.x 起必填，且必须与既有 grant 的 resource 逐字一致，否则所有会话失效。
+    // 1.2 起 scopes_supported 由 requiredScopes 取代，两者同设会抛错。
+    requiredScopes: [...MCP_SUPPORTED_SCOPES],
     resourceMetadata: {
       resource: mcpResource,
       ...(origin.startsWith('https:') ? { authorization_servers: [origin] } : {}),
-      scopes_supported: [...MCP_SUPPORTED_SCOPES],
       bearer_methods_supported: ['header'],
       resource_name: 'Inkstone private knowledge base',
     },
     clientIdMetadataDocumentEnabled: true,
-    allowImplicitFlow: false,
-    allowPlainPKCE: false,
     accessTokenTTL: 60 * 60,
     refreshTokenTTL: 30 * 24 * 60 * 60,
     clientRegistrationTTL: 90 * 24 * 60 * 60,

@@ -1,0 +1,109 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > blockReference 输出稳定 1`] = `
+"<p id="^block-id" data-block-id="block-id" data-line="0">引用</p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > code 输出稳定 1`] = `
+"<div class="code-block" data-line="0" data-lang="js" data-code-start="1"><div class="code-block-head"><span class="code-title">js</span><button class="code-copy" data-copy="" type="button" aria-label="markdown.copy_code">common.copy</button></div><pre><code>const a = 1
+</code></pre></div>"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > details 输出稳定 1`] = `
+"<p data-line="0">:::details 展开
+内容
+:::</p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > footnote 输出稳定 1`] = `
+"<p data-line="0">正文<sup class="footnote-ref"><a href="#fn-ink-NONCE-1" id="fnref-ink-NONCE-1">[1]</a></sup></p>
+<hr class="footnotes-sep">
+<section class="footnotes">
+<ol class="footnotes-list">
+<li id="fn-ink-NONCE-1" class="footnote-item"><p>脚注内容 <a href="#fnref-ink-NONCE-1" class="footnote-backref">↩︎</a></p>
+</li>
+</ol>
+</section>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > frontMatter 输出稳定 1`] = `
+"<details class="frontmatter-properties" data-line="0"><summary>markdown.properties</summary><dl><div class="frontmatter-row"><dt>title</dt><dd>测试</dd></div></dl></details><p data-line="4">正文</p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > heading 输出稳定 1`] = `
+"<h1 id="一级标题" tabindex="-1" data-line="0"><a class="heading-anchor" href="#一级标题" aria-hidden="true"></a> 一级标题</h1>
+<p data-line="2">正文段落。</p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > image 输出稳定 1`] = `
+"<p data-line="0"></p><figure><img src="/img.png" alt="替代文字" title="图片标题" loading="lazy" decoding="async" referrerpolicy="no-referrer"><figcaption>图片标题</figcaption></figure><p></p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > inlineCode 输出稳定 1`] = `
+"<p data-line="0">行内 <code>code</code> 片段</p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > link 输出稳定 1`] = `
+"<p data-line="0"><a href="https://example.com" target="_blank" rel="noopener noreferrer">外链</a> 和 <a href="/note">内链</a></p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > mark 输出稳定 1`] = `
+"<p data-line="0"><mark>高亮文字</mark></p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > mathBlock 输出稳定 1`] = `"<div class="math-block" data-line="0" data-math="b64.YV4yK2JeMj1jXjI"></div>"`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > mathInline 输出稳定 1`] = `
+"<p data-line="0">行内公式 <span class="math-inline" data-math="b64.YV4yK2JeMj1jXjI"></span></p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > table 输出稳定 1`] = `
+"<div class="table-wrap" data-line="0"><table><thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>2</td>
+</tr>
+</tbody>
+</table></div>"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > tabs 输出稳定 1`] = `
+"<p data-line="0">:::tabs
+:::tab 一
+A
+:::
+:::tab 二
+B
+:::
+:::</p>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > taskList 输出稳定 1`] = `
+"<ul class="contains-task-list" data-line="0">
+<li class="task-list-item enabled" data-task-line="0"><input type="checkbox" class="task-list-item-checkbox" data-task-line="0" aria-label="markdown.mark_complete"><span class="task-label"> 待办</span></li>
+<li class="task-list-item enabled done" data-task-line="1"><input type="checkbox" class="task-list-item-checkbox" checked="" data-task-line="1" aria-label="markdown.mark_incomplete"><span class="task-label"> 已完成</span></li>
+</ul>
+"
+`;
+
+exports[`markdown 渲染快照（markdown-it 15 升级回归） > wikilink 输出稳定 1`] = `
+"<p data-line="0"><a class="wikilink" data-wikilink="b64.55uu5qCH56yU6K6w" href="#">目标笔记</a> 与 <a class="wikilink" data-wikilink="b64.55uu5qCH56yU6K6w" href="#">显示名</a></p>
+"
+`;

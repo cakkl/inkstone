@@ -4,7 +4,7 @@ import type { Env } from './env'
 import { initializeDatabase } from './db/schema'
 import { drainAllFtsQueues } from './db/fts'
 import { drainAiIndexQueue } from './mcp/ai-search'
-import { createOAuthProvider, providerForScheduled } from './mcp/oauth'
+import { createOAuthProvider, purgeExpiredOAuthData } from './mcp/oauth'
 import { purgeRevokedMcpApiKeys } from './mcp/api-keys'
 import { purgeExpiredMcpOperations } from './mcp/operations'
 import { purgeExpiredOperationalData } from './lib/maintenance'
@@ -50,7 +50,7 @@ export default {
         purgeExpiredMcpOperations(env.DB),
         purgeExpiredOperationalData(env.DB),
         purgeRevokedMcpApiKeys(env.DB),
-        providerForScheduled(env).purgeExpiredData(env, { batchSize: 100 }),
+        purgeExpiredOAuthData(env),
         drainAiIndexQueue(env, 300),
         drainAllFtsQueues(env.DB),
       ])
