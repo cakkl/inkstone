@@ -17,14 +17,20 @@ export const tagsRoutes = new Hono<AppBindings>()
 
 tagsRoutes.use('*', requireAuth)
 
-const TAG_SELECT = `t.id, t.name, t.color, t.created_at,
-  (SELECT COUNT(*) FROM note_tags nt JOIN notes n ON n.id = nt.note_id
-    WHERE nt.tag_id = t.id AND n.user_id = t.user_id
-      AND n.deleted_at IS NULL AND n.is_archived = 0) AS note_count`
+// 与 sync.ts 同一口径：一次 GROUP BY 聚合代替逐标签相关子查询。
+const TAG_SELECT = `t.id, t.name, t.color, t.created_at, COALESCE(c.note_count, 0) AS note_count`
+const TAG_SOURCE = `tags t
+  LEFT JOIN (
+    SELECT nt.tag_id AS tag_id, COUNT(*) AS note_count
+      FROM note_tags nt
+      JOIN notes n ON n.id = nt.note_id
+     WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.is_archived = 0
+     GROUP BY nt.tag_id
+  ) c ON c.tag_id = t.id`
 
 tagsRoutes.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT ${TAG_SELECT} FROM tags t
+    `SELECT ${TAG_SELECT} FROM ${TAG_SOURCE}
      WHERE t.user_id = ?1 ORDER BY t.name COLLATE NOCASE ASC`,
   )
     .bind(c.get('userId'))
@@ -225,7 +231,7 @@ tagsRoutes.patch('/:id', async (c) => {
     await broadcastCursor(c)
   }
   const row = await c.env.DB.prepare(
-    `SELECT ${TAG_SELECT} FROM tags t
+    `SELECT ${TAG_SELECT} FROM ${TAG_SOURCE}
      WHERE t.id = ?2 AND t.user_id = ?1`,
   )
     .bind(userId, id)
@@ -280,7 +286,7 @@ async function loadTag(
   id: string,
 ): Promise<ReturnType<typeof toTag> | null> {
   const row = await db.prepare(
-    `SELECT ${TAG_SELECT} FROM tags t
+    `SELECT ${TAG_SELECT} FROM ${TAG_SOURCE}
      WHERE t.id = ?2 AND t.user_id = ?1`,
   ).bind(userId, id).first<TagRow>()
   return row ? toTag(row) : null

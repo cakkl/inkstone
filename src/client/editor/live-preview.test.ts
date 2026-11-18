@@ -1,6 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { renderMarkdownBlocks } from '../lib/markdown/renderer';
 import { mergeSettings, mergeSettingsPatch } from '@shared/constants';
+import { shiftBlockLineNumbers } from './live-preview';
+
+describe('shiftBlockLineNumbers', () => {
+    it('shifts data-line, data-task-line and data-code-start together', () => {
+        const html = '<div class="code-block" data-line="10" data-code-start="11"><span data-task-line="12"></span></div>';
+        const shifted = shiftBlockLineNumbers(html, 3);
+        expect(shifted).toContain('data-line="13"');
+        expect(shifted).toContain('data-code-start="14"');
+        expect(shifted).toContain('data-task-line="15"');
+    });
+
+    it('is a no-op for delta 0', () => {
+        const html = '<p data-line="5">x</p>';
+        expect(shiftBlockLineNumbers(html, 0)).toBe(html);
+    });
+
+    it('handles negative deltas (deleting lines above a block)', () => {
+        const html = '<div class="code-block" data-line="10" data-code-start="11"></div>';
+        const shifted = shiftBlockLineNumbers(html, -4);
+        expect(shifted).toContain('data-line="6"');
+        expect(shifted).toContain('data-code-start="7"');
+    });
+
+    it('leaves unrelated attributes untouched', () => {
+        const html = '<div data-lang="js" data-line-numbers="true" data-line="2"></div>';
+        const shifted = shiftBlockLineNumbers(html, 1);
+        expect(shifted).toContain('data-lang="js"');
+        expect(shifted).toContain('data-line-numbers="true"');
+        expect(shifted).toContain('data-line="3"');
+    });
+
+    it('covers the real renderer output, whose code blocks carry data-code-start', () => {
+        const { blocks } = renderMarkdownBlocks('```js\nconst a = 1\n```');
+        const html = blocks[0]!.html;
+        expect(html).toContain('data-code-start=');
+        expect(shiftBlockLineNumbers(html, 2)).toContain('data-code-start="3"');
+    });
+});
 
 describe('live preview Markdown compatibility', () => {
     it('defaults to live rendering and preserves an explicit opt-out across settings updates', () => {

@@ -29,9 +29,10 @@ export async function acquireLease(
   const renew = async (): Promise<boolean> => {
     if (released) return false
     const now = Date.now()
+    // 与 acquireLease 一致容错非 JSON 值：视为「锁已丢」返回 false，而非抛错。
     const renewed = await db.prepare(
       `UPDATE app_meta SET value = ?3
-        WHERE key = ?1 AND json_extract(value, '$.token') = ?2`,
+        WHERE key = ?1 AND json_valid(value) AND json_extract(value, '$.token') = ?2`,
     ).bind(key, token, JSON.stringify({ token, expiresAt: now + ttlMs })).run()
     return renewed.meta.changes === 1
   }

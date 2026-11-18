@@ -111,6 +111,15 @@ interface LiveState {
     revision: number;
 }
 
+/** 平移 HTML 内所有绝对行号属性（data-line / data-task-line / data-code-start）。导出以便单测。 */
+export function shiftBlockLineNumbers(html: string, delta: number): string {
+    if (!delta) return html;
+    return html.replace(
+        /(data-(?:task-line|line|code-start)=")(\d+)(")/g,
+        (_, before: string, line: string, after: string) => `${before}${Number(line) + delta}${after}`,
+    );
+}
+
 function decorate(state: EditorState, live: LiveState, title: string): DecorationSet {
     if (searchPanelOpen(state)) return Decoration.none;
     const ranges: Range<Decoration>[] = [];
@@ -144,13 +153,15 @@ export function livePreview(onHeadings: (headings: Heading[]) => void, getTitle:
             // Keep typing synchronous and cheap. Reparse after a short idle window; never
             // display stale HTML for a block whose source was touched in the meantime.
             const mapped = tr.docChanged ? value.blocks.flatMap((block) => {
+                // 与 decorate() 一致地夹到文档范围内，避免脏 block 触发 RangeError。
+                if (block.startLine + 1 > tr.startState.doc.lines) return [];
                 const from = tr.startState.doc.line(block.startLine + 1).from;
                 const to = tr.startState.doc.line(Math.min(block.endLine, tr.startState.doc.lines)).to;
                 if (tr.changes.touchesRange(from, to)) return [];
                 const startLine = tr.state.doc.lineAt(tr.changes.mapPos(from, 1)).number - 1;
                 const delta = startLine - block.startLine;
                 return [{ ...block, startLine,
-                    html: delta ? block.html.replace(/(data-(?:task-)?line=")(\d+)(")/g, (_, before, line, after) => `${before}${Number(line) + delta}${after}`) : block.html,
+                    html: shiftBlockLineNumbers(block.html, delta),
                     endLine: tr.state.doc.lineAt(tr.changes.mapPos(to, -1)).number }];
             }) : value.blocks;
             const next = { ...value, blocks: mapped, ...(refreshed ? renderMarkdownBlocks(tr.state.doc.toString()) : {}),

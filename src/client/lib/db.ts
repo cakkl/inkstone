@@ -31,6 +31,9 @@ interface ShellData {
   cursor: number
 }
 
+/** 跨标签页重放锁的最长等待时间；超时后调用方退回到「只刷新待办计数」。 */
+const OUTBOX_LOCK_WAIT_MS = 30_000
+
 let shellSaveTimer = 0
 let pendingShell: ShellData | null = null
 let pendingShellUserId: string | null = null
@@ -349,21 +352,32 @@ export const localDb = {
 
   async withOutboxReplayLock(owner: string, task: () => Promise<void>): Promise<boolean> {
     const lockName = activeUserId ? `inkstone-outbox-replay:${activeUserId}` : 'inkstone-outbox-replay'
+    // 两条路径必须同语义（超时返回 false），否则调用方的回退分支会变成死代码。
     if (typeof navigator !== 'undefined' && navigator.locks?.request) {
-      let acquired = false
-      await navigator.locks.request(
-        lockName,
-        async () => {
-          acquired = true
-          await task()
-        },
-      )
-      return acquired
+      const signal = typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(OUTBOX_LOCK_WAIT_MS)
+        : undefined
+      try {
+        await navigator.locks.request(
+          lockName,
+          signal ? { signal } : {},
+          async () => {
+            await task()
+          },
+        )
+        return true
+      } catch (error) {
+        // 超时未拿到锁：另一标签页正在重放，交给它即可。
+        if ((error as Error)?.name === 'AbortError' || (error as Error)?.name === 'TimeoutError') {
+          return false
+        }
+        throw error
+      }
     }
 
     const leaseMs = 90_000
     let acquired = false
-    const deadline = Date.now() + 30_000
+    const deadline = Date.now() + OUTBOX_LOCK_WAIT_MS
     while (!acquired && Date.now() < deadline) {
       const now = Date.now()
       await update<{ owner: string; expiresAt: number } | null>(

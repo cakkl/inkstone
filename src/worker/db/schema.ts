@@ -122,6 +122,7 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_versions_note ON note_versions(note_id, created_at DESC, id DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_versions_user ON note_versions(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_versions_user_id ON note_versions(user_id, id)`,
 
   `CREATE TABLE IF NOT EXISTS attachments (
     id TEXT PRIMARY KEY,
@@ -235,6 +236,7 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_expires_id ON sessions(expires_at, id)`,
 
   `CREATE TABLE IF NOT EXISTS login_attempts (
     key TEXT PRIMARY KEY,
@@ -537,6 +539,14 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
     version: 13,
     statements: [BACKUP_ARCHIVES_TABLE, BACKUP_ARCHIVES_INDEX],
   },
+  {
+    // 补复合索引：单列索引无法支撑 (user_id,id) 翻页与 (expires_at,id) 排序。
+    version: 14,
+    statements: [
+      `CREATE INDEX IF NOT EXISTS idx_versions_user_id ON note_versions(user_id, id)`,
+      `CREATE INDEX IF NOT EXISTS idx_sessions_expires_id ON sessions(expires_at, id)`,
+    ],
+  },
 ]
 
 const FTS_STATEMENT = `CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -636,6 +646,7 @@ const REQUIRED_INDEXES = [
   'idx_links_target_note',
   'idx_versions_note',
   'idx_versions_user',
+  'idx_versions_user_id',
   'idx_attachments_user',
   'idx_attachments_user_sha',
   'idx_attachments_note',
@@ -652,6 +663,7 @@ const REQUIRED_INDEXES = [
   'idx_changes_user',
   'idx_sessions_user',
   'idx_sessions_expires',
+  'idx_sessions_expires_id',
   'idx_login_attempts_last_fail',
   'idx_totp_recovery_codes_user',
   'idx_totp_challenges_user',

@@ -24,6 +24,11 @@ interface LibraryContext extends McpWriteContext {
   origin: string
 }
 
+/** 属性查询单页大小：足够小以便尽早命中即停，又不会产生过多往返。 */
+const PROPERTY_SCAN_PAGE = 50
+/** 扫描总上限，防止「不命中任何条件」时无限翻页。 */
+const PROPERTY_SCAN_MAX = 500
+
 interface FolderRow {
   id: string
   parent_id: string | null
@@ -187,27 +192,53 @@ export async function queryMcpNoteProperties(
     limit?: number
   },
 ) {
-  const { results } = await db.prepare(
-    `SELECT id, title, content, rev, updated_at FROM notes
-      WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500`,
-  ).bind(userId).all<{ id: string; title: string; content: string; rev: number; updated_at: number }>()
   const limit = Math.max(1, Math.min(50, input.limit ?? 20))
-  const matches = []
-  for (const note of results) {
-    const parsed = parseFrontMatter(note.content)
-    if (parsed.errors.length) continue
-    const accepted = input.conditions.every((condition) => propertyMatches(parsed.data, condition))
-    if (!accepted) continue
-    matches.push({
-      id: note.id,
-      title: note.title,
-      rev: note.rev,
-      updated_at: new Date(note.updated_at).toISOString(),
-      properties: parsed.data,
-    })
-    if (matches.length >= limit) break
+  const matches: Array<Record<string, unknown>> = []
+  let scanned = 0
+  // Front Matter 是 YAML，无法下推到 SQL；分页只为实现「凑满 limit 即停」。
+  let cursor: { updatedAt: number; id: string } | null = null
+  while (scanned < PROPERTY_SCAN_MAX && matches.length < limit) {
+    const statement: D1PreparedStatement = cursor
+      ? db.prepare(
+          `SELECT id, title, content, rev, updated_at FROM notes
+            WHERE user_id = ?1 AND deleted_at IS NULL
+              AND (updated_at < ?2 OR (updated_at = ?2 AND id > ?3))
+            ORDER BY updated_at DESC, id ASC LIMIT ?4`,
+        ).bind(userId, cursor.updatedAt, cursor.id, PROPERTY_SCAN_PAGE)
+      : db.prepare(
+          `SELECT id, title, content, rev, updated_at FROM notes
+            WHERE user_id = ?1 AND deleted_at IS NULL
+            ORDER BY updated_at DESC, id ASC LIMIT ?2`,
+        ).bind(userId, PROPERTY_SCAN_PAGE)
+    const { results } = await statement.all<{
+      id: string
+      title: string
+      content: string
+      rev: number
+      updated_at: number
+    }>()
+    if (!results.length) break
+    for (const note of results) {
+      if (scanned >= PROPERTY_SCAN_MAX) break
+      scanned++
+      const parsed = parseFrontMatter(note.content)
+      if (parsed.errors.length) continue
+      const accepted = input.conditions.every((condition) => propertyMatches(parsed.data, condition))
+      if (!accepted) continue
+      matches.push({
+        id: note.id,
+        title: note.title,
+        rev: note.rev,
+        updated_at: new Date(note.updated_at).toISOString(),
+        properties: parsed.data,
+      })
+      if (matches.length >= limit) break
+    }
+    const last = results[results.length - 1]!
+    cursor = { updatedAt: last.updated_at, id: last.id }
+    if (results.length < PROPERTY_SCAN_PAGE) break
   }
-  return { results: matches, scanned: results.length, scan_limit: 500 }
+  return { results: matches, scanned, scan_limit: PROPERTY_SCAN_MAX }
 }
 
 export async function createMcpFolder(

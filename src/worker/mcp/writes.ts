@@ -4,7 +4,7 @@ import { truncateText, utf8ByteLength } from '@shared/text-utils'
 import type { Note } from '@shared/types'
 import { NOTE_COLUMNS_FULL, toNote, type NoteRow } from '../db/rows'
 import { FTS_NOTE_MATCH_SQL } from '../db/fts'
-import { buildNoteDerivedStatements, LINK_TARGET_SUBQUERY } from '../db/writes'
+import { buildNoteDerivedStatements, LINK_TARGET_SUBQUERY, warnTruncatedDerived } from '../db/writes'
 import type { Env } from '../env'
 import { sha256Hex } from '../lib/encoding'
 import { ApiError } from '../lib/errors'
@@ -77,14 +77,15 @@ export async function createMcpNote(
         expectedContentHash: hash,
         expectedTitle: title,
         expectedUpdatedAt: now,
-      }).statements
+      })
+      warnTruncatedDerived(id, derived.truncated)
       const change = context.env.DB.prepare(
         `INSERT INTO changes (user_id, entity, entity_id, op, at)
          SELECT ?1, 'note', ?2, 'upsert', ?3
           WHERE EXISTS (SELECT 1 FROM notes
             WHERE id = ?2 AND user_id = ?1 AND rev = 1 AND content_hash = ?4)`,
       ).bind(context.userId, id, now, hash)
-      await context.env.DB.batch([insert, ...derived, change])
+      await context.env.DB.batch([insert, ...derived.statements, change])
       const note = await loadNote(context.env.DB, context.userId, id)
       await enqueueNoteIndex(context.env.DB, context.userId, id, 'embed')
       await afterMutation(context)
@@ -249,14 +250,15 @@ export async function restoreMcpNote(
         expectedContentHash: row.content_hash,
         expectedTitle: row.title,
         expectedUpdatedAt: now,
-      }).statements
+      })
+      warnTruncatedDerived(row.id, derived.truncated)
       const change = context.env.DB.prepare(
         `INSERT INTO changes (user_id, entity, entity_id, op, at)
          SELECT ?1, 'note', ?2, 'upsert', ?3
           WHERE EXISTS (SELECT 1 FROM notes
             WHERE id = ?2 AND user_id = ?1 AND rev = ?4 AND deleted_at IS NULL)`,
       ).bind(context.userId, row.id, now, nextRev)
-      const [updated] = await context.env.DB.batch([update, ...derived, change])
+      const [updated] = await context.env.DB.batch([update, ...derived.statements, change])
       if (!updated?.meta.changes) {
         throw ApiError.conflict('This note was modified elsewhere', {
           server: await loadNote(context.env.DB, context.userId, row.id),
