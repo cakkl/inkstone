@@ -380,11 +380,16 @@ export async function listMcpNotes(
 }
 
 export async function listMcpFolders(db: D1Database, userId: string): Promise<Record<string, unknown>> {
+  // 一次聚合替代逐文件夹相关子查询：成本由「文件夹数 × 笔记数」降为「笔记数」。
   const { results } = await db.prepare(
-    `SELECT f.id, f.parent_id, f.name, f.position,
-            (SELECT COUNT(*) FROM notes n
-              WHERE n.user_id = f.user_id AND n.folder_id = f.id AND n.deleted_at IS NULL) AS note_count
-       FROM folders f WHERE f.user_id = ?1 AND f.deleted_at IS NULL
+    `WITH counts AS (
+       SELECT folder_id, COUNT(*) AS c FROM notes
+        WHERE user_id = ?1 AND deleted_at IS NULL AND folder_id IS NOT NULL
+        GROUP BY folder_id)
+     SELECT f.id, f.parent_id, f.name, f.position, COALESCE(c.c, 0) AS note_count
+       FROM folders f
+       LEFT JOIN counts c ON c.folder_id = f.id
+      WHERE f.user_id = ?1 AND f.deleted_at IS NULL
       ORDER BY f.position ASC, f.name COLLATE NOCASE ASC`,
   ).bind(userId).all<{
     id: string

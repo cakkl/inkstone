@@ -432,44 +432,51 @@ searchRoutes.get('/graph', requireAuth, async (c) => {
     in_degree: number
     out_degree: number
   }
-  const degreeSelect = `
-    (SELECT COUNT(*) FROM (
-      SELECT target_key FROM links ld WHERE ld.source_note_id = n.id
-        AND ld.user_id = ? AND ld.target_note_id IS NOT NULL
-      UNION ALL
-      SELECT target_key FROM links ld WHERE ld.target_note_id = n.id
-        AND ld.user_id = n.user_id AND ld.source_note_id != n.id
-    )) AS degree,
-    (SELECT COUNT(*) FROM links li WHERE li.user_id = ? AND li.target_note_id = n.id) AS in_degree,
-    (SELECT COUNT(*) FROM links lo WHERE lo.user_id = ? AND lo.source_note_id = n.id
-      AND lo.target_note_id IS NOT NULL) AS out_degree`
+  // 按用户聚合一次：相关子查询里的 user_id 会让 links 主键前缀失效，退化为逐笔记全扫。
+  const degreeCtes = `outdeg AS (
+      SELECT source_note_id AS id, COUNT(*) AS c FROM links
+       WHERE user_id = ? AND target_note_id IS NOT NULL GROUP BY source_note_id),
+    indeg AS (
+      SELECT target_note_id AS id, COUNT(*) AS cAll,
+             SUM(CASE WHEN source_note_id <> target_note_id THEN 1 ELSE 0 END) AS cNonSelf
+        FROM links WHERE user_id = ? GROUP BY target_note_id)`
+  const degreeColumns = `COALESCE(o.c, 0) AS out_degree,
+         COALESCE(i.cAll, 0) AS in_degree,
+         COALESCE(o.c, 0) + COALESCE(i.cNonSelf, 0) AS degree`
+  const degreeJoins = `LEFT JOIN outdeg o ON o.id = n.id
+       LEFT JOIN indeg i ON i.id = n.id`
 
   let rows: GraphRow[]
   let totalNodes = 0
   if (mode === 'local') {
-    const neighborhood = `WITH RECURSIVE neighborhood(id, depth) AS (
+    // MATERIALIZED 必须保留：否则递归 CTE 按输出行重复求值（实测 118k vs 3k 行读取）。
+    // 边展开为 from_id → to_id，避免 source/target 上的 OR 条件（无法走索引）。
+    const neighborhood = `WITH RECURSIVE neighborhood(id, depth) AS MATERIALIZED (
       SELECT ? AS id, 0 AS depth
       UNION
-      SELECT CASE WHEN l.source_note_id = neighborhood.id THEN l.target_note_id ELSE l.source_note_id END,
-        neighborhood.depth + 1
-      FROM neighborhood
-      JOIN links l ON l.user_id = ? AND l.target_note_id IS NOT NULL
-        AND (l.source_note_id = neighborhood.id OR l.target_note_id = neighborhood.id)
-      JOIN notes adjacent ON adjacent.id = CASE
-        WHEN l.source_note_id = neighborhood.id THEN l.target_note_id ELSE l.source_note_id END
-        AND adjacent.user_id = l.user_id AND adjacent.deleted_at IS NULL AND adjacent.is_archived = 0
-      WHERE neighborhood.depth < ?
+      SELECT e.to_id, nb.depth + 1
+        FROM neighborhood nb
+        JOIN (SELECT source_note_id AS from_id, target_note_id AS to_id FROM links
+               WHERE user_id = ? AND target_note_id IS NOT NULL
+              UNION ALL
+              SELECT target_note_id, source_note_id FROM links
+               WHERE user_id = ? AND target_note_id IS NOT NULL) e
+          ON e.from_id = nb.id
+        JOIN notes adjacent ON adjacent.id = e.to_id AND adjacent.user_id = ?
+             AND adjacent.deleted_at IS NULL AND adjacent.is_archived = 0
+       WHERE nb.depth < ?
     ), nearby AS (SELECT id, MIN(depth) AS depth FROM neighborhood GROUP BY id)`
-    const prefixBinds = [centerId, userId, depth]
+    const prefixBinds = [centerId, userId, userId, userId, depth]
     const result = await c.env.DB.prepare(
-      `${neighborhood}
+      `${neighborhood}, ${degreeCtes}
        SELECT n.id, n.title, n.folder_id, f.name AS folder_name, f.color AS folder_color,
-         ${degreeSelect}, nearby.depth
+         ${degreeColumns}, nearby.depth
        FROM nearby JOIN notes n ON n.id = nearby.id
        LEFT JOIN folders f ON f.id = n.folder_id AND f.user_id = n.user_id
+       ${degreeJoins}
        WHERE ${filters.join(' AND ')}
        ORDER BY nearby.depth ASC, degree DESC, n.updated_at DESC, n.id ASC LIMIT ?`,
-    ).bind(...prefixBinds, userId, userId, userId, ...filterBinds, limit + 1).all<GraphRow>()
+    ).bind(...prefixBinds, userId, userId, ...filterBinds, limit + 1).all<GraphRow>()
     rows = result.results
     const count = await c.env.DB.prepare(
       `${neighborhood} SELECT COUNT(*) AS count FROM nearby JOIN notes n ON n.id = nearby.id
@@ -478,12 +485,14 @@ searchRoutes.get('/graph', requireAuth, async (c) => {
     totalNodes = Number(count?.count ?? rows.length)
   } else {
     const result = await c.env.DB.prepare(
-      `SELECT n.id, n.title, n.folder_id, f.name AS folder_name, f.color AS folder_color,
-         ${degreeSelect}
+      `WITH ${degreeCtes}
+       SELECT n.id, n.title, n.folder_id, f.name AS folder_name, f.color AS folder_color,
+         ${degreeColumns}
        FROM notes n LEFT JOIN folders f ON f.id = n.folder_id AND f.user_id = n.user_id
+       ${degreeJoins}
        WHERE ${filters.join(' AND ')}
        ORDER BY degree DESC, n.updated_at DESC, n.id ASC LIMIT ?`,
-    ).bind(userId, userId, userId, ...filterBinds, limit + 1).all<GraphRow>()
+    ).bind(userId, userId, ...filterBinds, limit + 1).all<GraphRow>()
     rows = result.results
     const count = await c.env.DB.prepare(
       `SELECT COUNT(*) AS count FROM notes n WHERE ${filters.join(' AND ')}`,

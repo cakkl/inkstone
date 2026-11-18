@@ -19,6 +19,7 @@ import {
   FTS_QUEUE_CONFLICT_SQL,
   LINK_TARGET_SUBQUERY,
   pruneOrphanTags,
+  warnTruncatedDerived,
 } from '../db/writes'
 import { fromBase64Url, fromUtf8, sha256Hex, toBase64Url, utf8 } from '../lib/encoding'
 import { ApiError } from '../lib/errors'
@@ -488,6 +489,7 @@ notesRoutes.patch('/:id', async (c) => {
     })
     statements.push(...derived.statements)
     derivedTags = derived.tags
+    warnTruncatedDerived(id, derived.truncated)
     if (contentChanged && !sameTagSet(splitTags(row.tag_names), derived.tags)) {
       statements.push(
         c.env.DB.prepare(

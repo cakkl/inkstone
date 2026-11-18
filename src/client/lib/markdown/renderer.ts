@@ -1,6 +1,6 @@
 /** Builds the sanitized Markdown rendering pipeline and its Inkstone-specific syntax extensions. */
 import MarkdownIt from 'markdown-it';
-import type Token from 'markdown-it/lib/token.mjs';
+import type { MarkdownIt as MarkdownItApi, Token } from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
 import footnote from 'markdown-it-footnote';
 import anchor from 'markdown-it-anchor';
@@ -25,6 +25,8 @@ export interface RenderResult {
     frontMatterErrors: string[];
 }
 interface RenderEnvironment {
+    // markdown-it 15 的 Env 带 string|symbol 索引签名，插件才能挂载任意键。
+    [key: string | symbol]: unknown;
     headings: Heading[];
     hasMath: boolean;
     hasMermaid: boolean;
@@ -526,11 +528,11 @@ md.renderer.rules.image = (tokens, index, options, env, self) => {
     const rendered = defaultImage
         ? defaultImage(tokens, index, options, env, self)
         : self.renderToken(tokens, index, options);
-    return title ? `<figure>${rendered}<figcaption>${escapeHtml(title)}</figcaption></figure>` : rendered;
+    return title ? `<figure>${rendered}<figcaption>${escapeHtml(String(title))}</figcaption></figure>` : rendered;
 };
 const defaultLink = md.renderer.rules.link_open;
 md.renderer.rules.link_open = (tokens, index, options, env, self) => {
-    const href = tokens[index]!.attrGet('href') ?? '';
+    const href = String(tokens[index]!.attrGet('href') ?? '');
     if (/^https?:/i.test(href)) {
         tokens[index]!.attrSet('target', '_blank');
         tokens[index]!.attrSet('rel', 'noopener noreferrer');
@@ -559,7 +561,7 @@ md.core.ruler.push('collect_headings', (state) => {
         env.headings.push({
             level: Number(token.tag.slice(1)),
             text,
-            slug: token.attrGet('id') ?? slugifyHeading(text),
+            slug: String(token.attrGet('id') ?? slugifyHeading(text)),
             line: token.map?.[0] ?? 0,
         });
     }
@@ -1112,7 +1114,7 @@ function expandBlockReferences(inline: Token, TokenConstructor: new (type: strin
     }
     inline.children = expanded;
 }
-function reparseInline(token: Token, content: string, markdown: MarkdownIt, env: unknown): void {
+function reparseInline(token: Token, content: string, markdown: MarkdownItApi, env: Record<string | symbol, unknown>): void {
     const children: Token[] = [];
     markdown.inline.parse(content, markdown, env, children);
     token.content = content;
@@ -1127,7 +1129,7 @@ function setTokenAttribute(token: Token, name: string, value: string): void {
     }
 }
 function appendTokenClass(token: Token, className: string): void {
-    const current = token.attrGet('class')?.split(/\s+/).filter(Boolean) ?? [];
+    const current = String(token.attrGet('class') ?? '').split(/\s+/).filter(Boolean);
     if (!current.includes(className))
         current.push(className);
     token.attrSet('class', current.join(' '));

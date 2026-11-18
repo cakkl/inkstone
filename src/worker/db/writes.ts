@@ -1,5 +1,5 @@
 /** Keeps tags, backlinks, full-text indexes, and change records consistent with note writes. */
-import { extractTags, extractWikiLinks, normalizeLinkKey } from '@shared/markdown-utils'
+import { extractTagsResult, extractWikiLinksResult, normalizeLinkKey } from '@shared/markdown-utils'
 import { newId } from '../lib/id'
 
 
@@ -79,13 +79,36 @@ export interface SyncDerivedOptions {
 }
 
 
+export interface NoteDerivedResult {
+  statements: D1PreparedStatement[]
+  tags: string[]
+  /** 标签或链接命中提取上限，超出部分不会写入 note_tags / links。 */
+  truncated: { tags: boolean; links: boolean }
+}
+
+/** 上限是防滥用设计；这里只保证截断不再静默（记日志）。 */
+export function warnTruncatedDerived(
+  noteId: string,
+  truncated: NoteDerivedResult['truncated'],
+): void {
+  if (truncated.tags) {
+    console.warn(`[inkstone] Note ${noteId} exceeded the 64-tag limit; extra tags were not indexed`)
+  }
+  if (truncated.links) {
+    console.warn(`[inkstone] Note ${noteId} exceeded the 200-wiki-link limit; extra links were not indexed`)
+  }
+}
+
 export function buildNoteDerivedStatements(
   opts: SyncDerivedOptions,
-): { statements: D1PreparedStatement[]; tags: string[] } {
+): NoteDerivedResult {
   const { db, userId, noteId, title, content, ftsEnabled } = opts
   const now = Date.now()
-  const tagNames = extractTags(content)
-  const links = extractWikiLinks(content)
+  const extractedTags = extractTagsResult(content)
+  const extractedLinks = extractWikiLinksResult(content)
+  const tagNames = extractedTags.tags
+  const links = extractedLinks.links
+  const truncated = { tags: extractedTags.truncated, links: extractedLinks.truncated }
   const tagRows = JSON.stringify(tagNames.map((name) => ({ id: newId(), name })))
   const linkRows = JSON.stringify(links.map((link) => ({ key: link.key, target: link.target })))
   const statements: D1PreparedStatement[] = []
@@ -235,7 +258,7 @@ export function buildNoteDerivedStatements(
     )
   }
 
-  return { statements, tags: tagNames }
+  return { statements, tags: tagNames, truncated }
 }
 
 function shiftPlaceholders(sql: string, offset: number): string {

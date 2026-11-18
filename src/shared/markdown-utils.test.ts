@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { extractAttachmentIds, extractTags } from './markdown-utils'
+import {
+  extractAttachmentIds,
+  extractTags,
+  extractTagsResult,
+  extractWikiLinks,
+  extractWikiLinksResult,
+} from './markdown-utils'
 
 describe('extractTags', () => {
   it('handles an unterminated inline-code marker with a mismatched trailing marker', () => {
@@ -8,6 +14,54 @@ describe('extractTags', () => {
 
   it('does not treat tags in complete inline code or fenced blocks as tags', () => {
     expect(extractTags('`#inline`\n```\n#fenced\n```\n#visible')).toEqual(['visible'])
+  })
+})
+
+describe('extractTagsResult', () => {
+  it('reports truncated=false and keeps every tag below the limit', () => {
+    const source = Array.from({ length: 10 }, (_, i) => `#tag${i}`).join(' ')
+    const result = extractTagsResult(source)
+    expect(result.truncated).toBe(false)
+    expect(result.tags).toHaveLength(10)
+  })
+
+  it('reports truncated=true and still returns exactly the first 64 tags', () => {
+    const source = Array.from({ length: 70 }, (_, i) => `#tag${i}`).join(' ')
+    const result = extractTagsResult(source)
+    expect(result.truncated).toBe(true)
+    expect(result.tags).toHaveLength(64)
+  })
+
+  it('exactly 64 tags is not truncated', () => {
+    const source = Array.from({ length: 64 }, (_, i) => `#tag${i}`).join(' ')
+    const result = extractTagsResult(source)
+    expect(result.truncated).toBe(false)
+    expect(result.tags).toHaveLength(64)
+  })
+
+  it('same content yields identical tags through both entry points', () => {
+    const source = '#a #b #c'
+    expect(extractTagsResult(source).tags).toEqual(extractTags(source))
+  })
+})
+
+describe('extractWikiLinksResult', () => {
+  it('reports truncated=false below the limit', () => {
+    const result = extractWikiLinksResult('[[a]] [[b]]')
+    expect(result.truncated).toBe(false)
+    expect(result.links.map((link) => link.target)).toEqual(['a', 'b'])
+  })
+
+  it('reports truncated=true and caps at 200 links', () => {
+    const source = Array.from({ length: 210 }, (_, i) => `[[note${i}]]`).join(' ')
+    const result = extractWikiLinksResult(source)
+    expect(result.truncated).toBe(true)
+    expect(result.links).toHaveLength(200)
+  })
+
+  it('same content yields identical links through both entry points', () => {
+    const source = '[[a|alias]] [[b]]'
+    expect(extractWikiLinksResult(source).links).toEqual(extractWikiLinks(source))
   })
 })
 

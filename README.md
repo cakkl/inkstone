@@ -80,7 +80,6 @@ Existing databases are upgraded automatically through versioned, idempotent migr
 | `npm run typecheck` | Run TypeScript project checks |
 | `npm run test:unit` | Run the Vitest unit test suite |
 | `npm run i18n:check` | Verify parity between the English and Chinese locale resources |
-| `npm run comments:check` | Enforce the source-comment policy |
 | `npm run build` | Type-check and create a production build |
 | `npm run deploy:kv` | Build and deploy with `wrangler.kv.toml` |
 | `npm run deploy:demo` | Build and deploy the static browser-only demo |

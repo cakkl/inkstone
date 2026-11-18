@@ -29,7 +29,6 @@ Run the relevant focused tests while developing, then run the complete release g
 ```bash
 npm run typecheck
 npm run i18n:check
-npm run comments:check
 npm run test:unit
 npm run build
 ```

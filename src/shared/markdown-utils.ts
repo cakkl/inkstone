@@ -386,23 +386,44 @@ export function sortTagNames(tags: Iterable<string>): string[] {
 }
 
 
-export function extractTags(content: string): string[] {
+export interface ExtractedTags {
+  tags: string[]
+  /** 命中上限后丢弃了后续标签。 */
+  truncated: boolean
+}
+
+const TAG_EXTRACT_LIMIT = 64
+
+export function extractTagsResult(content: string): ExtractedTags {
   const frontMatter = parseFrontMatter(content)
   const out = new Map<string, string>()
+  let overflow = false
   const add = (value: string) => {
+    if (overflow) return
     const key = value.normalize('NFKC').toLocaleLowerCase()
-    if (!out.has(key)) out.set(key, value)
+    if (out.has(key)) return
+    if (out.size >= TAG_EXTRACT_LIMIT) {
+      overflow = true
+      return
+    }
+    out.set(key, value)
   }
   for (const tag of frontMatterTags(frontMatter.data)) {
     const normalized = tag.replace(/^#/, '').trim()
     if (normalized && normalized.length <= 60 && !/^\d+$/.test(normalized)) add(normalized)
-    if (out.size >= 64) return sortTagNames(out.values())
+    if (overflow) break
   }
-  for (const occurrence of bodyTagOccurrences(frontMatter.body)) {
-    add(occurrence.name)
-    if (out.size >= 64) break
+  if (!overflow) {
+    for (const occurrence of bodyTagOccurrences(frontMatter.body)) {
+      add(occurrence.name)
+      if (overflow) break
+    }
   }
-  return sortTagNames(out.values())
+  return { tags: sortTagNames(out.values()), truncated: overflow }
+}
+
+export function extractTags(content: string): string[] {
+  return extractTagsResult(content).tags
 }
 
 function frontMatterTags(data: Record<string, unknown>): string[] {
@@ -424,10 +445,19 @@ export interface WikiLink {
 }
 
 
-export function extractWikiLinks(content: string): WikiLink[] {
+export interface ExtractedWikiLinks {
+  links: WikiLink[]
+  /** 命中上限后丢弃了后续链接。 */
+  truncated: boolean
+}
+
+const WIKI_LINK_LIMIT = 200
+
+export function extractWikiLinksResult(content: string): ExtractedWikiLinks {
   const safe = stripCodeRegions(splitFrontMatter(content).body)
   const seen = new Set<string>()
   const out: WikiLink[] = []
+  let truncated = false
   for (const m of safe.matchAll(WIKI_RE)) {
     const target = m[1]!.trim()
     if (!target) continue
@@ -435,11 +465,18 @@ export function extractWikiLinks(content: string): WikiLink[] {
     if (!noteTarget) continue
     const key = normalizeLinkKey(noteTarget)
     if (seen.has(key)) continue
+    if (out.length >= WIKI_LINK_LIMIT) {
+      truncated = true
+      break
+    }
     seen.add(key)
     out.push({ target, alias: m[2]?.trim() || null, key })
-    if (out.length >= 200) break
   }
-  return out
+  return { links: out, truncated }
+}
+
+export function extractWikiLinks(content: string): WikiLink[] {
+  return extractWikiLinksResult(content).links
 }
 
 const ATTACHMENT_REFERENCE_RE =

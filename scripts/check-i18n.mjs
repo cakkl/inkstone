@@ -77,6 +77,10 @@ const englishOnlyPaths = [
 for (const file of englishOnlyPaths.flatMap((target) => fs.existsSync(target) ? [...walk(target)] : [])) {
     if (file === path.join(localeRoot, 'zh-CN.ts') || !isTextSource(file))
         continue;
+    // 测试文件放行中文字面量：那里的中文是测试数据而非用户可见文本，
+    // 与下面 AST 规则一致地跳过（否则 '中'.repeat(...) 这类字节长度断言会误报）。
+    if (isTestFile(file))
+        continue;
     rejectHan(file);
 }
 for (const file of [
@@ -98,7 +102,7 @@ for (const file of walk(root)) {
     if (!/\.tsx?$/.test(file) || file.includes(`${path.sep}locales${path.sep}`) || file.endsWith(`${path.sep}i18n.ts`))
         continue;
     const sourceText = fs.readFileSync(file, 'utf8');
-    const isTestFile = file.includes('.test.');
+    const isTest = isTestFile(file);
     const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     visit(source);
     function visit(node) {
@@ -117,14 +121,14 @@ for (const file of walk(root)) {
                     report(argument, 'message keys must be English identifiers');
             }
         }
-        if (!isTestFile && ts.isJsxText(node) && /[\p{L}\p{N}]/u.test(node.text) && node.text.trim())
+        if (!isTest && ts.isJsxText(node) && /[\p{L}\p{N}]/u.test(node.text) && node.text.trim())
             report(node, `unlocalized JSX text ${JSON.stringify(node.text.trim())}`);
-        if (!isTestFile && ts.isJsxAttribute(node) && visibleAttributes.has(node.name.text) && node.initializer && ts.isStringLiteral(node.initializer)) {
+        if (!isTest && ts.isJsxAttribute(node) && visibleAttributes.has(node.name.text) && node.initializer && ts.isStringLiteral(node.initializer)) {
             const value = node.initializer.text.trim();
             if (value && !isTechnicalPlaceholder(node.name.text, value))
                 report(node, `unlocalized ${node.name.text} attribute ${JSON.stringify(value)}`);
         }
-        if (!isTestFile &&
+        if (!isTest &&
             (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) &&
             /\p{Script=Han}/u.test(node.text) &&
             !insideTranslationCall(node)) {
@@ -149,12 +153,63 @@ function placeholders(value) {
 function isTechnicalPlaceholder(name, value) {
     return name === 'placeholder' && (/^(?:https?:\/\/|[a-z0-9_.-]+\/?$)/i.test(value) || value === '…');
 }
+function isTestFile(file) {
+    return file.includes('.test.');
+}
 function isTextSource(file) {
     return /\.(?:css|html|js|jsx|json|md|mjs|svg|toml|ts|tsx)$/.test(file);
 }
+function blank(match) {
+    return ' '.repeat(match.length);
+}
+// 注释里的中文不算违规 —— 只约束会呈现给用户的文本。按文件类型剥离注释，
+// 并替换为等长空白，保证报错的行列号与原文一致。
+// 注意：JS/TS 必须走 AST 取注释范围。裸 scanner 没有 parser 上下文，
+// 无法区分除号与正则字面量起始，遇到 `/[\\%_]/` 这类写法会吞掉整份文件，
+// 一个问题都报不出来。
+function stripComments(file, text) {
+    const extension = path.extname(file).toLowerCase();
+    if (extension === '.css')
+        return text.replace(/\/\*[\s\S]*?\*\//g, blank);
+    if (extension === '.html' || extension === '.svg' || extension === '.md')
+        return text.replace(/<!--[\s\S]*?-->/g, blank);
+    if (extension === '.toml')
+        return text.replace(/^[ \t]*#[^\n]*/gm, blank);
+    if (!['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extension))
+        return text;
+    const jsx = extension === '.tsx' || extension === '.jsx';
+    const kind = jsx
+        ? ts.ScriptKind.TSX
+        : extension === '.js' || extension === '.mjs' || extension === '.cjs'
+            ? ts.ScriptKind.JS
+            : ts.ScriptKind.TS;
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
+    const ranges = new Map();
+    const collect = (list) => {
+        for (const range of list ?? [])
+            ranges.set(range.pos, range);
+    };
+    const visit = (node) => {
+        collect(ts.getLeadingCommentRanges(text, node.getFullStart()));
+        collect(ts.getTrailingCommentRanges(text, node.getEnd()));
+        ts.forEachChild(node, visit);
+    };
+    visit(source);
+    if (!ranges.size)
+        return text;
+    const chars = text.split('');
+    for (const range of ranges.values()) {
+        for (let index = range.pos; index < range.end; index++) {
+            // 保留换行，避免报错行号错位。
+            if (chars[index] !== '\n' && chars[index] !== '\r')
+                chars[index] = ' ';
+        }
+    }
+    return chars.join('');
+}
 function rejectHan(file) {
     const source = fs.readFileSync(file, 'utf8');
-    const checked = (allowedHanFragments.get(file) ?? []).reduce((text, fragment) => text.replace(fragment, ' '.repeat(fragment.length)), source);
+    const checked = (allowedHanFragments.get(file) ?? []).reduce((text, fragment) => text.replace(fragment, blank), stripComments(file, source));
     const match = forbiddenCjk.exec(checked);
     if (!match)
         return;

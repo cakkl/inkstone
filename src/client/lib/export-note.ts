@@ -1,6 +1,14 @@
 import { renderMarkdown } from './markdown/renderer'
 
-const KATEX_CSS_URL = 'https://cdn.jsdelivr.net/npm/katex@0.18.1/dist/katex.min.css'
+/** 内联本地 KaTeX CSS：避免 CDN 依赖与版本硬编码漂移（约 24 KB，仅导出时加载）。 */
+async function localKatexCss(): Promise<string> {
+  try {
+    const mod = await import('katex/dist/katex.min.css?inline')
+    return mod.default
+  } catch {
+    return ''
+  }
+}
 
 export function downloadTextFile(filename: string, text: string, mime: string): void {
   const blob = new Blob([text], { type: mime })
@@ -22,14 +30,14 @@ export function exportNoteAsMarkdown(note: { title: string; content: string }): 
 
 export async function exportNoteAsHtml(note: { title: string; content: string }, language: string): Promise<void> {
   const rendered = renderMarkdown(note.content)
-  const body = await inlinePrivateImages(rendered.html)
-  downloadTextFile(`${safeFileName(note.title) || 'note'}.html`, htmlDocument(note.title, body, language), 'text/html;charset=utf-8')
+  const [body, css] = await Promise.all([inlinePrivateImages(rendered.html), localKatexCss()])
+  downloadTextFile(`${safeFileName(note.title) || 'note'}.html`, htmlDocument(note.title, body, language, css), 'text/html;charset=utf-8')
 }
 
 export async function exportNoteAsPdf(note: { title: string; content: string }, language: string): Promise<void> {
   const rendered = renderMarkdown(note.content)
-  const body = await inlinePrivateImages(rendered.html)
-  const html = htmlDocument(note.title, body, language)
+  const [body, css] = await Promise.all([inlinePrivateImages(rendered.html), localKatexCss()])
+  const html = htmlDocument(note.title, body, language, css)
   await printHtml(html)
 }
 
@@ -103,7 +111,7 @@ function safeFileName(title: string): string {
     .slice(0, 80)
 }
 
-function htmlDocument(title: string, bodyHtml: string, language: string): string {
+function htmlDocument(title: string, bodyHtml: string, language: string, katexCss: string): string {
   const safeTitle = escapeHtml(title)
   return `<!DOCTYPE html>
 <html lang="${escapeAttr(language)}">
@@ -111,7 +119,7 @@ function htmlDocument(title: string, bodyHtml: string, language: string): string
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${safeTitle}</title>
-<link rel="stylesheet" href="${KATEX_CSS_URL}" crossorigin="anonymous">
+${katexCss ? `<style>${katexCss}</style>` : ''}
 <style>
 :root { color-scheme: light; }
 * { box-sizing: border-box; }
