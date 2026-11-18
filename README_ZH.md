@@ -81,7 +81,6 @@ Inkstone 是运行在 Cloudflare Workers 上的浏览器笔记本。笔记始终
 | `npm run typecheck` | 执行 TypeScript 项目检查 |
 | `npm run test:unit` | 运行 Vitest 单元测试 |
 | `npm run i18n:check` | 检查中英文资源键是否完整一致 |
-| `npm run comments:check` | 检查源码注释规范 |
 | `npm run build` | 类型检查并生成生产构建 |
 | `npm run deploy:kv` | 使用 `wrangler.kv.toml` 构建并部署 |
 | `npm run deploy:demo` | 构建并部署纯静态体验版 |

@@ -152,9 +152,57 @@ function isTechnicalPlaceholder(name, value) {
 function isTextSource(file) {
     return /\.(?:css|html|js|jsx|json|md|mjs|svg|toml|ts|tsx)$/.test(file);
 }
+function blank(match) {
+    return ' '.repeat(match.length);
+}
+// 注释里的中文不算违规 —— 只约束会呈现给用户的文本。按文件类型剥离注释，
+// 并替换为等长空白，保证报错的行列号与原文一致。
+// 注意：JS/TS 必须走 AST 取注释范围。裸 scanner 没有 parser 上下文，
+// 无法区分除号与正则字面量起始，遇到 `/[\\%_]/` 这类写法会吞掉整份文件，
+// 一个问题都报不出来。
+function stripComments(file, text) {
+    const extension = path.extname(file).toLowerCase();
+    if (extension === '.css')
+        return text.replace(/\/\*[\s\S]*?\*\//g, blank);
+    if (extension === '.html' || extension === '.svg' || extension === '.md')
+        return text.replace(/<!--[\s\S]*?-->/g, blank);
+    if (extension === '.toml')
+        return text.replace(/^[ \t]*#[^\n]*/gm, blank);
+    if (!['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extension))
+        return text;
+    const jsx = extension === '.tsx' || extension === '.jsx';
+    const kind = jsx
+        ? ts.ScriptKind.TSX
+        : extension === '.js' || extension === '.mjs' || extension === '.cjs'
+            ? ts.ScriptKind.JS
+            : ts.ScriptKind.TS;
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
+    const ranges = new Map();
+    const collect = (list) => {
+        for (const range of list ?? [])
+            ranges.set(range.pos, range);
+    };
+    const visit = (node) => {
+        collect(ts.getLeadingCommentRanges(text, node.getFullStart()));
+        collect(ts.getTrailingCommentRanges(text, node.getEnd()));
+        ts.forEachChild(node, visit);
+    };
+    visit(source);
+    if (!ranges.size)
+        return text;
+    const chars = text.split('');
+    for (const range of ranges.values()) {
+        for (let index = range.pos; index < range.end; index++) {
+            // 保留换行，避免报错行号错位。
+            if (chars[index] !== '\n' && chars[index] !== '\r')
+                chars[index] = ' ';
+        }
+    }
+    return chars.join('');
+}
 function rejectHan(file) {
     const source = fs.readFileSync(file, 'utf8');
-    const checked = (allowedHanFragments.get(file) ?? []).reduce((text, fragment) => text.replace(fragment, ' '.repeat(fragment.length)), source);
+    const checked = (allowedHanFragments.get(file) ?? []).reduce((text, fragment) => text.replace(fragment, blank), stripComments(file, source));
     const match = forbiddenCjk.exec(checked);
     if (!match)
         return;
