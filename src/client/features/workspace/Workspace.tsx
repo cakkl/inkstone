@@ -134,7 +134,12 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const isMobile = breakpoint === 'mobile';
     const paneActive = !grouped || pane === 'active' || activeWorkspacePane === pane;
     const mobilePane = useUi((s) => s.mobilePane);
-    const layout = isMobile ? (mobilePane === 'preview' ? 'preview' : 'live') : grouped && pane !== 'active'
+    const notePaneMode = useRef<'live' | 'preview'>(mobilePane === 'preview' ? 'preview' : 'live');
+    if (mobilePane === 'preview')
+        notePaneMode.current = 'preview';
+    else if (mobilePane === 'editor')
+        notePaneMode.current = 'live';
+    const layout = isMobile ? notePaneMode.current : grouped && pane !== 'active'
             ? workspacePaneLayouts[pane]
             : settings.preview.layout;
     const showEditor = layout !== 'preview';
