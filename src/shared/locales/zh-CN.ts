@@ -255,6 +255,7 @@ export const ZH_CN_MESSAGES = {
     "common.off": "已关闭",
     "common.on": "已开启",
     "common.open": "打开",
+    "common.offline_unavailable": "离线时不可用",
     "common.open_registration": "开放注册",
     "common.open_settings": "打开设置",
     "common.ordered_list": "有序列表",

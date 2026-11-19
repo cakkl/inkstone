@@ -178,13 +178,14 @@ export const useNotes = create<NotesState>((set, get) => ({
 
                 const cached = await localDb.loadShell();
                 if (cached) {
+                    const cachedNotes = Object.fromEntries(cached.notes.map((note) => {
+                        const normalized = normalizeNoteSummaryTags(note);
+                        return [normalized.id, normalized];
+                    }));
                     set({
-                        notes: Object.fromEntries(cached.notes.map((note) => {
-                            const normalized = normalizeNoteSummaryTags(note);
-                            return [normalized.id, normalized];
-                        })),
+                        notes: cachedNotes,
                         folders: cached.folders.map(normalizeFolder),
-                        tags: cached.tags,
+                        tags: applyTagCounts(cached.tags, cachedNotes),
                         links: cached.links,
                         cursor: cached.cursor,
                         drafts: new Set(cached.drafts),
@@ -372,9 +373,12 @@ export const useNotes = create<NotesState>((set, get) => ({
                 ? reconcileList(state.folders, payload.folders, folderEqual)
                 : mergeById(state.folders, payload.folders, payload.deletions, 'folder', folderEqual);
             const folders = applyPendingFolderMutations(remoteFolders);
-            const tags = replaceFacets
-                ? reconcileList(state.tags, payload.tags, tagEqual)
-                : mergeById(state.tags, payload.tags, payload.deletions, 'tag', tagEqual);
+            const tags = applyTagCounts(
+                replaceFacets
+                    ? reconcileList(state.tags, payload.tags, tagEqual)
+                    : mergeById(state.tags, payload.tags, payload.deletions, 'tag', tagEqual),
+                notes,
+            );
             if (notes === state.notes &&
                 links === state.links &&
                 folders === state.folders &&
@@ -1218,25 +1222,16 @@ export const useNotes = create<NotesState>((set, get) => ({
     async refreshTags() {
         const sequence = ++tagRefreshSequence;
         const generation = tagStateGeneration;
-        try {
-            const { tags } = await api.tags.list();
-            let changed = false;
-            set((state) => {
-                if (sequence !== tagRefreshSequence || generation !== tagStateGeneration)
-                    return state;
-                const next = reconcileList(state.tags, tags, tagEqual);
-                if (next === state.tags)
-                    return state;
-                tagStateGeneration++;
-                changed = true;
-                return { tags: next };
-            });
-            if (changed)
-                scheduleShellSave(get);
-        }
-        catch (error) {
-            throw error;
-        }
+        set((state) => {
+            if (sequence !== tagRefreshSequence || generation !== tagStateGeneration)
+                return state;
+            const next = applyTagCounts(state.tags, state.notes);
+            if (next === state.tags)
+                return state;
+            tagStateGeneration++;
+            return { tags: next };
+        });
+        scheduleShellSave(get);
     },
     replayPending() {
         return replayOutbox(get, set)
@@ -2665,6 +2660,10 @@ function refreshNoteLinks(id: string, previousTitle?: string): void {
         }
         return { links };
     });
+    useNotes.setState((current) => {
+        const tags = applyTagCounts(current.tags, current.notes);
+        return tags === current.tags ? current : { tags };
+    });
     scheduleShellSave(() => useNotes.getState());
 }
 const PREFETCH_NOTE_LIMIT = 30;
@@ -2983,11 +2982,32 @@ function reconcileFolderUi(folders: Folder[]): void {
     if (ui.view === 'folder' && (!ui.folderId || !validIds.has(ui.folderId)))
         ui.openView('all');
 }
+function applyTagCounts(tags: Tag[], notes: Record<string, NoteSummary>): Tag[] {
+    if (!tags.length)
+        return tags;
+    const counts = new Map<string, number>();
+    for (const note of Object.values(notes)) {
+        if (note.deletedAt || note.isArchived)
+            continue;
+        for (const name of note.tags) {
+            const key = name.toLowerCase();
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+    }
+    let changed = false;
+    const next = tags.map((tag) => {
+        const count = counts.get(tag.name.toLowerCase()) ?? 0;
+        if (count === tag.count)
+            return tag;
+        changed = true;
+        return { ...tag, count };
+    });
+    return changed ? next : tags;
+}
 function tagEqual(a: Tag, b: Tag): boolean {
     return (a.id === b.id &&
         a.name === b.name &&
         a.color === b.color &&
-        a.count === b.count &&
         a.createdAt === b.createdAt);
 }
 function currentFolderId(): string | null {

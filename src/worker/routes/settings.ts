@@ -13,6 +13,8 @@ export const settingsRoutes = new Hono<AppBindings>()
 
 settingsRoutes.use('*', requireAuth)
 
+const STATS_CACHE_TTL_MS = 60_000
+
 
 settingsRoutes.put('/registration', async (c) => {
   const user = c.get('user')
@@ -59,38 +61,49 @@ settingsRoutes.put('/', async (c) => {
 
 settingsRoutes.get('/stats', async (c) => {
   const userId = c.get('userId')
+  const now = Date.now()
+  const cacheKey = `stats-v1:${userId}`
+  const cached = await c.env.DB.prepare(`SELECT value FROM app_meta WHERE key = ?1`)
+    .bind(cacheKey)
+    .first<{ value: string }>()
+  if (cached) {
+    try {
+      const value = JSON.parse(cached.value) as Record<string, unknown>
+      const fresh = typeof value.at === 'number' && now - value.at < STATS_CACHE_TTL_MS
+      const shaped = typeof value.versions === 'number' && typeof value.attachments === 'number' &&
+        typeof value.attachmentBytes === 'number'
+      if (fresh && shaped) {
+        return c.json({
+          versions: value.versions,
+          attachments: value.attachments,
+          attachmentBytes: value.attachmentBytes,
+        })
+      }
+    } catch {
+    }
+  }
   const row = await c.env.DB.prepare(
-    `SELECT note_stats.*, attachment_stats.*,
-       (SELECT COUNT(*) FROM folders WHERE user_id = ?1 AND deleted_at IS NULL) AS folders,
-       (SELECT COUNT(*) FROM tags WHERE user_id = ?1) AS tags,
-       (SELECT COUNT(*) FROM note_versions WHERE user_id = ?1) AS versions,
-       (SELECT COUNT(*) FROM links WHERE user_id = ?1) AS links
-     FROM (
-       SELECT COUNT(CASE WHEN deleted_at IS NULL THEN 1 END) AS notes,
-              COUNT(deleted_at) AS trashed,
-              COALESCE(SUM(CASE WHEN deleted_at IS NULL THEN char_count ELSE 0 END), 0) AS chars,
-              COALESCE(SUM(CASE WHEN deleted_at IS NULL THEN word_count ELSE 0 END), 0) AS words
-         FROM notes WHERE user_id = ?1
-     ) note_stats CROSS JOIN (
-       SELECT COUNT(*) AS attachments, COALESCE(SUM(size), 0) AS attachmentBytes
-         FROM attachments WHERE user_id = ?1
-     ) attachment_stats`,
+    `SELECT (SELECT COUNT(*) FROM note_versions WHERE user_id = ?1) AS versions,
+            (SELECT COUNT(*) FROM attachments WHERE user_id = ?1) AS attachments,
+            (SELECT COALESCE(SUM(size), 0) FROM attachments WHERE user_id = ?1) AS attachmentBytes`,
   )
     .bind(userId)
-    .first<Record<string, number>>()
-
-  return c.json({
-    notes: row?.notes ?? 0,
-    trashed: row?.trashed ?? 0,
-    folders: row?.folders ?? 0,
-    tags: row?.tags ?? 0,
-    attachments: row?.attachments ?? 0,
-    attachmentBytes: row?.attachmentBytes ?? 0,
-    chars: row?.chars ?? 0,
-    words: row?.words ?? 0,
-    versions: row?.versions ?? 0,
-    links: row?.links ?? 0,
-  })
+    .first<{ versions: number; attachments: number; attachmentBytes: number }>()
+  const values = {
+    versions: Number(row?.versions ?? 0),
+    attachments: Number(row?.attachments ?? 0),
+    attachmentBytes: Number(row?.attachmentBytes ?? 0),
+  }
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+      .bind(cacheKey, JSON.stringify({ at: now, ...values }))
+      .run()
+  } catch {
+  }
+  return c.json(values)
 })
 
 function parse(raw: string): Record<string, unknown> {

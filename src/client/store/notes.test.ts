@@ -397,11 +397,23 @@ it('keeps locally resolved links while the server still reports the old copy', a
     notes: { [note.id]: note, [target.id]: target },
     contents: { [note.id]: 'old', [target.id]: 'body' },
   })
-
   useNotes.getState().editContent(note.id, 'see [[Target note]]')
   await vi.advanceTimersByTimeAsync(400)
   expect(useNotes.getState().links[note.id]).toHaveLength(1)
 
   useNotes.getState().applySync({ ...sync(note), notes: sync(note).notes, links: [] })
   expect(useNotes.getState().links[note.id]).toHaveLength(1)
+})
+
+it('derives tag counts from the local notes instead of the server payload', () => {
+  const tagged = { ...note, id: '01m1r8923zajxnw9y0dhs6sy9s', tags: ['Work'] }
+  const archived = { ...note, id: '01m1r8923zajxnw9y0dhs6sy9t', tags: ['work'], isArchived: true }
+  useNotes.setState({
+    notes: { [note.id]: note, [tagged.id]: tagged, [archived.id]: archived },
+    tags: [{ id: 't1', name: 'work', color: null, count: 0, createdAt: 1 }],
+  })
+
+  useNotes.getState().applySync({ ...sync(note), notes: [], tags: [] })
+
+  expect(useNotes.getState().tags[0]?.count).toBe(1)
 })

@@ -25,6 +25,7 @@ export function DataSettings() {
     const mountedRef = useRef(true);
     const toast = useUi((s) => s.toast);
     const emptyTrash = useNotes((s) => s.emptyTrash);
+    const online = useNotes((s) => s.online);
     const pull = useNotes((s) => s.pull);
     const loadStats = useCallback(async (force = true) => {
         if (!mountedRef.current)
@@ -141,7 +142,7 @@ export function DataSettings() {
         <h3 className="mb-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">{t("settings.attachments")}</h3>
 
         <SettingRow title={t("attachments.manage")} description={t("attachments.manage_description")}>
-          <Button size="sm" icon={<ImageIcon size={13}/>} onClick={() => setAttachmentManagerOpen(true)}>{t("attachments.manage")}</Button>
+          <Button size="sm" icon={<ImageIcon size={13}/>} disabled={!online} title={online ? undefined : t("common.offline_unavailable")} onClick={() => setAttachmentManagerOpen(true)}>{t("attachments.manage")}</Button>
         </SettingRow>
       </section>
 

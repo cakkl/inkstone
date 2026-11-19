@@ -133,6 +133,11 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const [containerWidth, setContainerWidth] = useState(0);
     const isMobile = breakpoint === 'mobile';
     const isDraftNote = useNotes((s) => (note ? s.drafts.has(note.id) : false));
+    const online = useNotes((s) => s.online);
+    const serverOnlyReason = isDraftNote
+        ? t("notes.draft_unavailable")
+        : !online ? t("common.offline_unavailable") : null;
+    const serverOnlyDisabled = serverOnlyReason !== null;
     const paneActive = !grouped || pane === 'active' || activeWorkspacePane === pane;
     const mobilePane = useUi((s) => s.mobilePane);
     const notePaneMode = useRef<'live' | 'preview'>(mobilePane === 'preview' ? 'preview' : 'live');
@@ -326,14 +331,14 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             id: 'versions',
             label: t("common.version_history"),
             icon: <History size={13}/>,
-            disabled: isDraftNote,
+            disabled: serverOnlyDisabled,
             onSelect: () => openPanel('versions'),
         },
         {
             id: 'share',
             label: t("workspace.share"),
             icon: <Share2 size={13}/>,
-            disabled: isDraftNote,
+            disabled: serverOnlyDisabled,
             onSelect: () => openPanel('share'),
         },
         {
@@ -472,8 +477,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             </IconButton>
           </Tooltip>
           </>}
-          {!isMobile && (<Tooltip label={isDraftNote ? t("notes.draft_unavailable") : t("common.version_history")} disabled={isDraftNote}>
-              <IconButton label={t("common.version_history")} size="sm" disabled={isDraftNote} onClick={() => openPanel('versions')}>
+          {!isMobile && (<Tooltip label={serverOnlyReason ?? t("common.version_history")} disabled={serverOnlyDisabled}>
+              <IconButton label={t("common.version_history")} size="sm" disabled={serverOnlyDisabled} onClick={() => openPanel('versions')}>
                 <History size={14}/>
               </IconButton>
             </Tooltip>)}
@@ -490,8 +495,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 {(isMobile ? mobileOutlineOpen : outlineOpen) ? <PanelRightClose size={14}/> : <ListTree size={14}/>}
               </IconButton>
             </Tooltip>)}
-          {!isMobile && (<Tooltip label={isDraftNote ? t("notes.draft_unavailable") : t("workspace.share")} disabled={isDraftNote}>
-              <IconButton label={t("workspace.share")} size="sm" disabled={isDraftNote} onClick={() => openPanel('share')}>
+          {!isMobile && (<Tooltip label={serverOnlyReason ?? t("workspace.share")} disabled={serverOnlyDisabled}>
+              <IconButton label={t("workspace.share")} size="sm" disabled={serverOnlyDisabled} onClick={() => openPanel('share')}>
                 <Share2 size={14}/>
               </IconButton>
             </Tooltip>)}

@@ -254,6 +254,7 @@ export const EN_US_MESSAGES = {
     "common.off": "Off",
     "common.on": "On",
     "common.open": "Open",
+    "common.offline_unavailable": "Not available offline",
     "common.open_registration": "Open registration",
     "common.open_settings": "Open settings",
     "common.ordered_list": "Ordered list",
