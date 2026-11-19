@@ -766,14 +766,6 @@ export function createDemoBackend(): DemoBackend {
     })
   })
 
-  app.get('/api/update', (c) => c.json({
-    currentVersion: APP_VERSION,
-    latestVersion: null,
-    updateUrl: null,
-    checkedAt: null,
-    status: 'unavailable' as const,
-  }))
-
   app.get('/api/share', (c) => c.json({
     shares: [...state.shares.values()]
       .flatMap((share) => {

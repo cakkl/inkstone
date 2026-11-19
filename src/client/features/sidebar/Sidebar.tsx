@@ -9,7 +9,6 @@ import { Avatar, IconButton, Logo, SectionLabel } from '../../components/primiti
 import { Menu, Tooltip, confirm, useContextMenu, type MenuItem } from '../../components/overlay';
 import { switchThemeWithTransition, useUi } from '../../store/ui';
 import { useSession } from '../../store/session';
-import { useUpdate } from '../../store/update';
 import { createContextualNote, useFolderTree, useNavigationCounts, useNotes, type FolderNode } from '../../store/notes';
 import { folderDescendantIds, folderPath, folderPathLabel, openFolderView } from '../../lib/folders';
 import { FolderAppearance, FolderPicker } from '../folders/FolderPicker';
@@ -119,7 +118,6 @@ function SidebarAccount({ rail = false }: {
     const updateSettings = useSession((s) => s.updateSettings);
     const logout = useSession((s) => s.logout);
     const openPanel = useUi((s) => s.openPanel);
-    const updateAvailable = useUpdate((s) => s.available);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const [menuOpen, setMenuOpen] = useState(false);
     if (!user)
@@ -131,7 +129,7 @@ function SidebarAccount({ rail = false }: {
         {
             id: 'settings',
             label: t("common.settings"),
-            icon: <SettingsIcon size={13} showDot={user.role === 'owner' && updateAvailable}/>,
+            icon: <SettingsIcon size={13}/>,
             combo: APP_SHORTCUTS.settings,
             onSelect: () => openPanel('settings'),
         },
@@ -180,7 +178,7 @@ function SidebarAccount({ rail = false }: {
           </button>
           <Tooltip label={t("common.settings")} side="top">
             <IconButton label={t("common.settings")} size="sm" onClick={() => openPanel('settings')} className="mr-1 shrink-0 text-[var(--text-quaternary)] group-hover:text-[var(--text-tertiary)]">
-              <SettingsIcon size={14} showDot={user.role === 'owner' && updateAvailable}/>
+              <SettingsIcon size={14}/>
             </IconButton>
           </Tooltip>
         </div>)}
@@ -188,13 +186,11 @@ function SidebarAccount({ rail = false }: {
       <Menu anchor={buttonRef} open={menuOpen} onClose={() => setMenuOpen(false)} items={items} width={252}/>
     </>);
 }
-function SettingsIcon({ size, showDot }: {
+function SettingsIcon({ size }: {
     size: number;
-    showDot: boolean;
 }) {
-    return (<span className="relative inline-flex">
+    return (<span className="inline-flex">
       <Settings size={size}/>
-      {showDot && (<span data-update-dot aria-hidden="true" className="absolute -top-1 -right-1 size-2 rounded-full border border-[var(--bg-sunken)] bg-[var(--danger)]"/>)}
     </span>);
 }
 function ViewItem({ icon, label, view, count, active, onSelect, }: {

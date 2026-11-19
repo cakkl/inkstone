@@ -70,17 +70,6 @@ export interface TotpRecoveryCodesResult {
   generatedAt: number
 }
 
-export type UpdateCheckStatus = 'ok' | 'unavailable'
-
-export interface UpdateCheckResponse {
-  currentVersion: string
-  latestVersion: string | null
-  updateUrl: string | null
-  checkedAt: number | null
-  status: UpdateCheckStatus
-}
-
-
 export type ThemePref = 'light' | 'dark' | 'system'
 export type AppLocale = 'zh-CN' | 'en-US'
 export type AccentName = 'cinnabar' | 'indigo' | 'celadon' | 'amber' | 'terracotta' | 'wisteria' | 'graphite'

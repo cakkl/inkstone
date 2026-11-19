@@ -14,7 +14,6 @@ import { EditorSkeleton } from '../../components/feedback';
 import { PANEL_WIDTHS, useUi } from '../../store/ui';
 import { createContextualNote, useNotes } from '../../store/notes';
 import { useSession } from '../../store/session';
-import { useUpdate } from '../../store/update';
 import { Sidebar } from '../sidebar/Sidebar';
 import { NoteList } from '../list/NoteList';
 import { SearchButton } from './SearchButton';
@@ -30,13 +29,10 @@ const GraphPanel = lazy(() => import('../graph/GraphPanel').then((m) => ({ defau
 const SharePanel = lazy(() => import('../share/SharePanel').then((m) => ({ default: m.SharePanel })));
 const VersionsPanel = lazy(() => import('../workspace/VersionsPanel').then((m) => ({ default: m.VersionsPanel })));
 const Lightbox = lazy(() => import('../preview/Lightbox').then((m) => ({ default: m.Lightbox })));
-const UpdateDialog = lazy(() => import('../update/UpdateDialog').then((m) => ({ default: m.UpdateDialog })));
 export function AppShell() {
     const breakpoint = useBreakpoint();
-    const role = useSession((s) => s.user?.role);
     const userId = useSession((s) => s.user?.id);
     useEffect(() => scheduleSettingsWarmup(), [userId]);
-    const checkForUpdates = useUpdate((s) => s.check);
     useSyncEngine();
     useGlobalHotkeys();
     const hydrated = useNotes((s) => s.hydrated);
@@ -53,10 +49,6 @@ export function AppShell() {
         useUi.getState().openExplorer();
         void openNote(match[1]!);
     }, [hydrated, loading, openNote]);
-    useEffect(() => {
-        if (role === 'owner')
-            void checkForUpdates();
-    }, [role, checkForUpdates]);
 
     useEffect(() => {
         const ui = useUi.getState();
@@ -242,8 +234,6 @@ function OverlayHost() {
     const closePanel = useUi((s) => s.closePanel);
     const lightbox = useUi((s) => s.lightbox);
     const setLightbox = useUi((s) => s.setLightbox);
-    const role = useSession((s) => s.user?.role);
-    const updateDialogOpen = useUpdate((s) => s.dialogOpen);
     const isMobile = useBreakpoint() === 'mobile';
     useBackLayer(isMobile && panel !== null, 'overlay-panel', closePanel);
     useBackLayer(isMobile && Boolean(lightbox), 'overlay-lightbox', () => setLightbox(null));
@@ -257,9 +247,6 @@ function OverlayHost() {
         {panel === 'versions' && <VersionsPanel onClose={closePanel}/>}
         {lightbox && <Lightbox />}
       </Suspense>
-      {role === 'owner' && updateDialogOpen && (<Suspense fallback={null}>
-        <UpdateDialog />
-      </Suspense>)}
     </>);
 }
 

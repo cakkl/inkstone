@@ -34,7 +34,6 @@ import type {
   TotpLoginResult,
   TotpSetupInfo,
   TotpStatus,
-  UpdateCheckResponse,
   UserSettings,
 } from '@shared/types'
 import { publishBroadcast } from './db'
@@ -470,10 +469,6 @@ export const api = {
       clear: () =>
         request<{ ok: true; removed: number }>('/api/mcp/ai-search/clear', { method: 'POST' }),
     },
-  },
-
-  update: {
-    check: () => request<UpdateCheckResponse>('/api/update', { timeoutMs: 10_000 }),
   },
 
   share: {
