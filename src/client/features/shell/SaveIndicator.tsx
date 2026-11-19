@@ -1,8 +1,9 @@
-import { CloudOff } from 'lucide-react';
+import { CloudOff, FileText } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { Tooltip } from '../../components/overlay';
 import { useRelativeTime } from '../../lib/hooks';
 import { useNotes } from '../../store/notes';
+import { useUi } from '../../store/ui';
 import { t } from "../../lib/i18n";
 
 
@@ -11,11 +12,21 @@ export function SaveIndicator() {
     const lastSavedAt = useNotes((s) => s.lastSavedAt);
     const online = useNotes((s) => s.online);
     const pending = useNotes((s) => s.pendingCount);
+    const activeNoteId = useUi((s) => s.activeNoteId);
+    const draft = useNotes((s) => (activeNoteId ? s.drafts.has(activeNoteId) : false));
     const offline = !online || status === 'offline';
     const saving = status === 'saving';
     const dirty = status === 'dirty';
     const synced = status === 'synced' || status === 'idle';
     const savedAgo = useRelativeTime(lastSavedAt, !offline && !saving && !dirty);
+    if (draft) {
+        return (<Tooltip label={t("notes.draft_hint")} side="bottom">
+        <span role="img" aria-label={t("notes.draft")} className="flex h-6 items-center gap-1.5 rounded-[var(--r-sm)] px-1.5 text-[11px] text-[var(--text-tertiary)]">
+          <FileText size={13}/>
+          <span aria-hidden="true" className="hidden md:inline">{t("notes.draft")}</span>
+        </span>
+      </Tooltip>);
+    }
     const label = offline
         ? pending
             ? t("shell.offline_value0_changes_pending", { value0: pending })

@@ -24,6 +24,7 @@ interface NotesState {
     saveStatus: SaveStatus;
     lastSavedAt: number;
     pendingCount: number;
+    drafts: ReadonlySet<string>;
     online: boolean;
     bootstrap: () => Promise<void>;
     pull: (options?: {
@@ -158,6 +159,7 @@ export const useNotes = create<NotesState>((set, get) => ({
     saveStatus: 'idle',
     lastSavedAt: 0,
     pendingCount: 0,
+    drafts: new Set<string>(),
     online: typeof navigator === 'undefined' ? true : navigator.onLine,
     bootstrap() {
 
@@ -181,6 +183,7 @@ export const useNotes = create<NotesState>((set, get) => ({
                         folders: cached.folders.map(normalizeFolder),
                         tags: cached.tags,
                         cursor: cached.cursor,
+                        drafts: new Set(cached.drafts),
                         hydrated: true,
                     });
                     const initialId = pickInitialNoteId(get().notes, get().folders);
@@ -353,7 +356,7 @@ export const useNotes = create<NotesState>((set, get) => ({
         }
         const previousNoteIds = payload.full ? Object.keys(get().notes) : [];
         set((state) => {
-            const notes = reconcileNotes(state.notes, payload.notes, payload.deletions, payload.full);
+            const notes = reconcileNotes(state.notes, payload.notes, payload.deletions, payload.full, state.drafts);
             const replaceFacets = payload.full || payload.facetsFull;
             const remoteFolders = replaceFacets
                 ? reconcileList(state.folders, payload.folders, folderEqual)
@@ -377,6 +380,7 @@ export const useNotes = create<NotesState>((set, get) => ({
                 folders,
                 tags,
                 cursor: payload.cursor,
+                drafts: [...state.drafts],
             });
             return { notes, folders, tags, cursor: payload.cursor };
         });
@@ -409,7 +413,8 @@ export const useNotes = create<NotesState>((set, get) => ({
             return;
         if (hasOwnContent(state.contents, id)) {
             useUi.getState().setWorkspaceNote(targetPane, id, activate, options?.revealOnMobile);
-            revalidateNote(id, summary.rev, set, get);
+            if (!state.drafts.has(id))
+                revalidateNote(id, summary.rev, set, get);
             return;
         }
         set((s) => {
@@ -687,45 +692,23 @@ export const useNotes = create<NotesState>((set, get) => ({
             updatedAt: now,
             deletedAt: null,
         };
-        const previousWorkspace = captureWorkspaceState();
         adoptNote(optimistic, set, get);
         if (input?.open !== false) {
             useUi.getState().setActiveNote(id);
             useUi.getState().setMobilePane('editor');
         }
-        const request = api.notes.create({ id, title, content, folderId, ...(isStarred ? { isStarred: true } : {}) });
-        pendingNoteCreates.set(id, request);
-        try {
-            const note = await request;
-            adoptNote(note, set, get);
-            if (isStarred && !note.isStarred)
-                await get().patchNote(note.id, { isStarred: true });
-            return note.id;
+        if (!title && !content.trim()) {
+            markDraft(id, set, get);
+            return id;
         }
-        catch (err) {
-            if (!dirty.has(id)) {
-                set((state) => {
-                    const notes = { ...state.notes };
-                    const contents = { ...state.contents };
-                    delete notes[id];
-                    delete contents[id];
-                    return { notes, contents };
-                });
-                void localDb.dropContent(id);
-                if (workspaceContainsNote(id))
-                    restoreWorkspaceState(previousWorkspace);
-                scheduleShellSave(get);
-            }
-            toastError(err, t("notes.could_not_create_note"));
-            return null;
-        }
-        finally {
-            if (pendingNoteCreates.get(id) === request)
-                pendingNoteCreates.delete(id);
-        }
+        return pushCreatedNote(id, { title, content, folderId, isStarred }, set, get);
     },
     async patchNote(id, patch) {
         commitPendingSummaryDerivation(id);
+        if (get().drafts.has(id)) {
+            applyDraftPatch(id, patch, set, get);
+            return;
+        }
         const mutation = beginNoteMutation(id, compactOptimisticPatch(patch), set, get);
         if (!mutation)
             return;
@@ -765,6 +748,10 @@ export const useNotes = create<NotesState>((set, get) => ({
         const before = get().notes[id];
         if (!before)
             return;
+        if (get().drafts.has(id)) {
+            discardDraft(id, set, get);
+            return;
+        }
         const workspaceBefore = captureWorkspaceState();
         const wasOpen = workspaceContainsNote(id);
         const deletedAt = Date.now();
@@ -867,6 +854,10 @@ export const useNotes = create<NotesState>((set, get) => ({
         const before = get().notes[id];
         if (!before)
             return;
+        if (get().drafts.has(id)) {
+            discardDraft(id, set, get);
+            return;
+        }
         const hadContent = hasOwnContent(get().contents, id);
         const beforeContent = get().contents[id];
         const workspaceBefore = captureWorkspaceState();
@@ -948,6 +939,10 @@ export const useNotes = create<NotesState>((set, get) => ({
         const source = get().notes[id];
         if (!source)
             return;
+        if (get().drafts.has(id)) {
+            duplicateDraft(source, set, get);
+            return;
+        }
         const copyId = newLocalEntityId();
         const now = Date.now();
         const hasContent = hasOwnContent(get().contents, id);
@@ -1307,6 +1302,26 @@ function stageNoteTextWrite(id: string, content: string, title: string | undefin
     const summary = state.notes[id];
     if (!summary || !hasOwnContent(state.contents, id))
         return;
+    if (state.drafts.has(id)) {
+        const nextTitle = title ?? summary.title;
+        const contentChanged = state.contents[id] !== content;
+        const titleChanged = title !== undefined && summary.title !== title;
+        if (contentChanged || titleChanged) {
+            const updatedAt = Math.max(Date.now(), summary.updatedAt + 1);
+            set((current) => ({
+                notes: titleChanged
+                    ? { ...current.notes, [id]: { ...current.notes[id]!, title: title!, updatedAt } }
+                    : current.notes,
+                contents: contentChanged ? { ...current.contents, [id]: content } : current.contents,
+            }));
+            if (contentChanged)
+                void localDb.setContent(id, { content, rev: summary.rev, updatedAt });
+            scheduleShellSave(get);
+        }
+        if (nextTitle.trim() || content.trim())
+            void materializeDraft(id, set, get);
+        return;
+    }
     const previousDirty = dirty.get(id);
     const writeId = newLocalWriteId();
     const queueId = previousDirty?.queueId ?? outboxId(id);
@@ -1895,7 +1910,161 @@ function scheduleShellSave(get: () => NotesState): void {
         folders: state.folders,
         tags: state.tags,
         cursor: state.cursor,
+        drafts: [...state.drafts],
     });
+}
+type DraftPatch = Partial<Pick<NoteSummary, 'isPinned' | 'isStarred' | 'isArchived'>> & { folderId?: string | null };
+function markDraft(id: string, set: SetNotesState, get: () => NotesState): void {
+    set((state) => ({ drafts: new Set(state.drafts).add(id) }));
+    scheduleShellSave(get);
+}
+function clearDraft(id: string, set: SetNotesState, get: () => NotesState): void {
+    if (!get().drafts.has(id))
+        return;
+    set((state) => {
+        const drafts = new Set(state.drafts);
+        drafts.delete(id);
+        return { drafts };
+    });
+    scheduleShellSave(get);
+}
+function applyDraftPatch(id: string, patch: DraftPatch, set: SetNotesState, get: () => NotesState): void {
+    const summary = get().notes[id];
+    if (!summary)
+        return;
+    const next: NoteSummary = {
+        ...summary,
+        ...(patch.isPinned !== undefined ? { isPinned: patch.isPinned } : {}),
+        ...(patch.isStarred !== undefined ? { isStarred: patch.isStarred } : {}),
+        ...(patch.isArchived !== undefined ? { isArchived: patch.isArchived } : {}),
+        ...(patch.folderId !== undefined ? { folderId: patch.folderId } : {}),
+        updatedAt: Math.max(Date.now(), summary.updatedAt + 1),
+    };
+    set((state) => ({ notes: { ...state.notes, [id]: next } }));
+    scheduleShellSave(get);
+}
+async function pushCreatedNote(id: string, input: { title: string; content: string; folderId: string | null; isStarred: boolean }, set: SetNotesState, get: () => NotesState): Promise<string | null> {
+    const request = api.notes.create({ id, title: input.title, content: input.content, folderId: input.folderId, ...(input.isStarred ? { isStarred: true } : {}) });
+    pendingNoteCreates.set(id, request);
+    try {
+        const note = await request;
+        adoptNote(note, set, get);
+        clearDraft(id, set, get);
+        if (input.isStarred && !note.isStarred)
+            await get().patchNote(note.id, { isStarred: true });
+        return note.id;
+    }
+    catch (err) {
+        toastError(err, t("notes.could_not_create_note"));
+        markDraft(id, set, get);
+        return null;
+    }
+    finally {
+        if (pendingNoteCreates.get(id) === request)
+            pendingNoteCreates.delete(id);
+    }
+}
+async function materializeDraft(id: string, set: SetNotesState, get: () => NotesState): Promise<void> {
+    if (pendingNoteCreates.has(id))
+        return;
+    const summary = get().notes[id];
+    if (!summary)
+        return;
+    const content = get().contents[id] ?? '';
+    const flags = { isPinned: summary.isPinned, isStarred: summary.isStarred, isArchived: summary.isArchived };
+    const request = api.notes.create({
+        id,
+        title: summary.title,
+        content,
+        folderId: summary.folderId,
+        ...(flags.isStarred ? { isStarred: true } : {}),
+    });
+    pendingNoteCreates.set(id, request);
+    try {
+        const note = await request;
+        adoptNote(note, set, get);
+        clearDraft(id, set, get);
+        const patch: DraftPatch = {
+            ...(flags.isStarred && !note.isStarred ? { isStarred: true } : {}),
+            ...(flags.isPinned ? { isPinned: true } : {}),
+            ...(flags.isArchived ? { isArchived: true } : {}),
+        };
+        if (Object.keys(patch).length)
+            await get().patchNote(id, patch);
+        const latestContent = get().contents[id];
+        if (latestContent !== undefined && (latestContent !== content || get().notes[id]?.title !== summary.title))
+            stageNoteTextWrite(id, latestContent, get().notes[id]?.title, set, get);
+    }
+    catch (err) {
+        toastError(err, t("notes.could_not_create_note"));
+    }
+    finally {
+        if (pendingNoteCreates.get(id) === request)
+            pendingNoteCreates.delete(id);
+    }
+}
+function discardDraft(id: string, set: SetNotesState, get: () => NotesState, silent = false): void {
+    const note = get().notes[id];
+    if (!note)
+        return;
+    const hadContent = hasOwnContent(get().contents, id);
+    const content = get().contents[id];
+    set((state) => {
+        const notes = { ...state.notes };
+        const contents = { ...state.contents };
+        delete notes[id];
+        delete contents[id];
+        const drafts = new Set(state.drafts);
+        drafts.delete(id);
+        return { notes, contents, drafts };
+    });
+    void localDb.dropContent(id);
+    if (workspaceContainsNote(id))
+        useUi.getState().removeWorkspaceNote(id);
+    scheduleShellSave(get);
+    if (silent)
+        return;
+    useUi.getState().toast({
+        title: t("notes.draft_deleted"),
+        action: {
+            label: t("common.undo"),
+            run: () => {
+                set((state) => ({
+                    notes: { ...state.notes, [id]: note },
+                    contents: hadContent ? { ...state.contents, [id]: content! } : state.contents,
+                    drafts: new Set(state.drafts).add(id),
+                }));
+                if (hadContent)
+                    void localDb.setContent(id, { content: content!, rev: note.rev, updatedAt: note.updatedAt });
+                scheduleShellSave(get);
+            },
+        },
+    });
+}
+function duplicateDraft(source: NoteSummary, set: SetNotesState, get: () => NotesState): void {
+    const copyId = newLocalEntityId();
+    const now = Date.now();
+    const content = hasOwnContent(get().contents, source.id) ? get().contents[source.id]! : '';
+    const copy: NoteSummary = {
+        ...source,
+        id: copyId,
+        title: duplicateNoteTitle(source.title, LIMITS.titleMaxLength),
+        isPinned: false,
+        isStarred: false,
+        rev: 1,
+        position: now,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+    };
+    set((state) => ({
+        notes: { ...state.notes, [copyId]: copy },
+        contents: { ...state.contents, [copyId]: content },
+        drafts: new Set(state.drafts).add(copyId),
+    }));
+    void localDb.setContent(copyId, { content, rev: 1, updatedAt: now });
+    scheduleShellSave(get);
+    useUi.getState().setActiveNote(copyId);
 }
 function deletionCursorFrom(err: ApiError): number | null {
     const value = (err.details as { deletionCursor?: unknown } | undefined)?.deletionCursor;
@@ -2412,7 +2581,7 @@ export function acknowledgeOutboxResult(result: OutboxResult): void {
 function reconcileNotes(current: Record<string, NoteSummary>, incoming: NoteSummary[], deletions: {
     entity: string;
     id: string;
-}[], full: boolean): Record<string, NoteSummary> {
+}[], full: boolean, drafts: ReadonlySet<string>): Record<string, NoteSummary> {
     if (full) {
         const next: Record<string, NoteSummary> = {};
         let unchanged = Object.keys(current).length === incoming.length;
@@ -2429,7 +2598,7 @@ function reconcileNotes(current: Record<string, NoteSummary>, incoming: NoteSumm
                 unchanged = false;
         }
         for (const [id, note] of Object.entries(current)) {
-            if ((dirty.has(id) || pendingNoteMutations.has(id) || pendingNoteCreates.has(id)) && !next[id])
+            if ((dirty.has(id) || pendingNoteMutations.has(id) || pendingNoteCreates.has(id) || drafts.has(id)) && !next[id])
                 next[id] = note;
         }
         return unchanged ? current : next;
@@ -2859,3 +3028,38 @@ export function findNoteByTitle(title: string): NoteSummary | undefined {
     const key = normalizeLinkKey(title);
     return Object.values(useNotes.getState().notes).find((n) => !n.deletedAt && normalizeLinkKey(n.title) === key);
 }
+
+function isBlankDraft(state: NotesState, id: string): boolean {
+    if (!state.drafts.has(id) || pendingNoteCreates.has(id))
+        return false;
+    const note = state.notes[id];
+    if (!note)
+        return false;
+    return !note.title.trim() && !(state.contents[id] ?? '').trim();
+}
+
+type WorkspaceNoteIds = Pick<ReturnType<typeof useUi.getState>, 'activeNoteId' | 'workspacePrimaryNoteId' | 'workspaceSecondaryNoteId'>;
+
+function mountedNoteIds(ui: WorkspaceNoteIds): Set<string> {
+    const ids = new Set<string>();
+    for (const id of [ui.activeNoteId, ui.workspacePrimaryNoteId, ui.workspaceSecondaryNoteId]) {
+        if (id)
+            ids.add(id);
+    }
+    return ids;
+}
+
+let visibleNoteIds = mountedNoteIds(useUi.getState());
+
+useUi.subscribe((state) => {
+    const next = mountedNoteIds(state);
+    const previous = visibleNoteIds;
+    visibleNoteIds = next;
+    for (const id of previous) {
+        if (next.has(id))
+            continue;
+        if (!isBlankDraft(useNotes.getState(), id))
+            continue;
+        discardDraft(id, useNotes.setState, useNotes.getState, true);
+    }
+});

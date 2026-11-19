@@ -23,6 +23,7 @@ vi.mock('../lib/api', async () => {
   return { ...actual, api: { ...actual.api, notes: { get: mocks.get, patch: mocks.patch, create: mocks.create } } }
 })
 import { useNotes } from './notes'
+import { useUi } from './ui'
 import { ApiError } from '../lib/api'
 
 const note: Note = {
@@ -41,7 +42,8 @@ beforeEach(() => {
   mocks.queue = []
   mocks.get.mockReset(); mocks.patch.mockReset(); mocks.create.mockReset()
   useNotes.setState({ notes: { [note.id]: note }, contents: { [note.id]: note.content },
-    folders: [], tags: [], cursor: 1, pendingCount: 0, online: true })
+    folders: [], tags: [], cursor: 1, pendingCount: 0, online: true, drafts: new Set<string>() })
+  useUi.setState({ activeNoteId: null, workspacePrimaryNoteId: null, workspaceSecondaryNoteId: null })
 })
 afterEach(() => vi.useRealTimers())
 
@@ -69,4 +71,73 @@ it('saves conflicting local edits as a copy without retrying over the server not
   expect(useNotes.getState().contents[note.id]).toBe('remote important edit')
   expect(useNotes.getState().notes[note.id].rev).toBe(3)
   expect(mocks.queue).toHaveLength(0)
+})
+
+it('keeps an empty new note local until it has content', async () => {
+  const id = await useNotes.getState().createNote({ open: false })
+  expect(id).toBeTruthy()
+  expect(mocks.create).not.toHaveBeenCalled()
+  expect(useNotes.getState().drafts.has(id!)).toBe(true)
+  expect(useNotes.getState().notes[id!]).toBeTruthy()
+})
+
+it('uploads a draft as soon as it has a title', async () => {
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  mocks.create.mockImplementation(async (input: any) => ({ ...note, ...input, rev: 1, id }))
+  useNotes.getState().editTitle(id, 'New title')
+  await vi.waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1))
+  expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ id, title: 'New title', content: '' }))
+  expect(useNotes.getState().drafts.has(id)).toBe(false)
+})
+
+it('keeps a blank draft local while the body has no text', async () => {
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  useNotes.getState().editContent(id, '   ')
+  await vi.waitFor(() => expect(useNotes.getState().contents[id]).toBe('   '))
+  expect(mocks.create).not.toHaveBeenCalled()
+  expect(useNotes.getState().drafts.has(id)).toBe(true)
+})
+
+it('applies draft patches locally without hitting the server', async () => {
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  await useNotes.getState().patchNote(id, { isPinned: true, isStarred: true })
+  expect(useNotes.getState().notes[id]).toMatchObject({ isPinned: true, isStarred: true })
+  expect(mocks.patch).not.toHaveBeenCalled()
+})
+
+it('deletes a draft locally and offers an in-memory undo', async () => {
+  const toast = vi.fn()
+  useUi.setState({ toast })
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  await useNotes.getState().deleteNote(id)
+  expect(useNotes.getState().notes[id]).toBeUndefined()
+  expect(useNotes.getState().drafts.has(id)).toBe(false)
+  expect(mocks.patch).not.toHaveBeenCalled()
+  const action = toast.mock.calls[0][0].action
+  expect(action).toBeTruthy()
+  action.run()
+  expect(useNotes.getState().notes[id]).toBeTruthy()
+  expect(useNotes.getState().drafts.has(id)).toBe(true)
+})
+
+it('keeps drafts across a full sync that omits them', async () => {
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  useNotes.getState().applySync({ ...sync(note), notes: [], cursor: 5, full: true })
+  expect(useNotes.getState().notes[id]).toBeTruthy()
+})
+
+it('discards a blank draft when switching to another note', async () => {
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  useUi.setState({ activeNoteId: id, workspacePrimaryNoteId: id })
+  useUi.setState({ activeNoteId: note.id, workspacePrimaryNoteId: note.id })
+  expect(useNotes.getState().notes[id]).toBeUndefined()
+  expect(useNotes.getState().drafts.has(id)).toBe(false)
+})
+
+it('keeps a draft that already has text when switching away', async () => {
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  useNotes.getState().editTitle(id, 'kept')
+  useUi.setState({ activeNoteId: id, workspacePrimaryNoteId: id })
+  useUi.setState({ activeNoteId: note.id, workspacePrimaryNoteId: note.id })
+  expect(useNotes.getState().notes[id]).toBeTruthy()
 })

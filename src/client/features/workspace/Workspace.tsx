@@ -132,6 +132,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const [mobileOutlineOpen, setMobileOutlineOpen] = useState(false);
     const [containerWidth, setContainerWidth] = useState(0);
     const isMobile = breakpoint === 'mobile';
+    const isDraftNote = useNotes((s) => (note ? s.drafts.has(note.id) : false));
     const paneActive = !grouped || pane === 'active' || activeWorkspacePane === pane;
     const mobilePane = useUi((s) => s.mobilePane);
     const notePaneMode = useRef<'live' | 'preview'>(mobilePane === 'preview' ? 'preview' : 'live');
@@ -316,18 +317,20 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const mobileItems: MenuItem[] = [
         ...(isMobile ? [
             { id: 'star', label: note.isStarred ? t("common.remove_from_favorites") : t("navigation.favorites"), checked: note.isStarred, onSelect: () => void patchNote(note.id, { isStarred: !note.isStarred }) },
-            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, onSelect: toggleBacklinks },
+            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, disabled: isDraftNote, onSelect: toggleBacklinks },
         ] : []),
         {
             id: 'versions',
             label: t("common.version_history"),
             icon: <History size={13}/>,
+            disabled: isDraftNote,
             onSelect: () => openPanel('versions'),
         },
         {
             id: 'share',
             label: t("workspace.share"),
             icon: <Share2 size={13}/>,
+            disabled: isDraftNote,
             onSelect: () => openPanel('share'),
         },
         {
@@ -460,14 +463,14 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
               <Star size={14} className={note.isStarred ? 'fill-current' : undefined}/>
             </IconButton>
           </Tooltip>
-          <Tooltip label={t("common.backlinks")}>
-            <IconButton label={t("common.backlinks")} size="sm" active={backlinksOpen} onClick={toggleBacklinks}>
+          <Tooltip label={isDraftNote ? t("notes.draft_unavailable") : t("common.backlinks")} disabled={isDraftNote}>
+            <IconButton label={t("common.backlinks")} size="sm" active={backlinksOpen} disabled={isDraftNote} onClick={toggleBacklinks}>
               <LinkIcon size={14}/>
             </IconButton>
           </Tooltip>
           </>}
-          {!isMobile && (<Tooltip label={t("common.version_history")}>
-              <IconButton label={t("common.version_history")} size="sm" onClick={() => openPanel('versions')}>
+          {!isMobile && (<Tooltip label={isDraftNote ? t("notes.draft_unavailable") : t("common.version_history")} disabled={isDraftNote}>
+              <IconButton label={t("common.version_history")} size="sm" disabled={isDraftNote} onClick={() => openPanel('versions')}>
                 <History size={14}/>
               </IconButton>
             </Tooltip>)}
@@ -484,8 +487,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 {(isMobile ? mobileOutlineOpen : outlineOpen) ? <PanelRightClose size={14}/> : <ListTree size={14}/>}
               </IconButton>
             </Tooltip>)}
-          {!isMobile && (<Tooltip label={t("workspace.share")}>
-              <IconButton label={t("workspace.share")} size="sm" onClick={() => openPanel('share')}>
+          {!isMobile && (<Tooltip label={isDraftNote ? t("notes.draft_unavailable") : t("workspace.share")} disabled={isDraftNote}>
+              <IconButton label={t("workspace.share")} size="sm" disabled={isDraftNote} onClick={() => openPanel('share')}>
                 <Share2 size={14}/>
               </IconButton>
             </Tooltip>)}

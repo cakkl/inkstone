@@ -17,6 +17,7 @@ const KEY = {
   folders: 'folders',
   tags: 'tags',
   cursor: 'cursor',
+  drafts: 'drafts',
   content: (id: string) => `note:${id}`,
   outbox: 'outbox',
   outboxReplayLease: 'outboxReplayLease',
@@ -29,6 +30,7 @@ interface ShellData {
   folders: Folder[]
   tags: Tag[]
   cursor: number
+  drafts: string[]
 }
 
 /** 跨标签页重放锁的最长等待时间；超时后调用方退回到「只刷新待办计数」。 */
@@ -181,15 +183,17 @@ export const localDb = {
     folders: Folder[]
     tags: Tag[]
     cursor: number
+    drafts: string[]
   } | null> {
-    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor].map((key) => userScopedKey(key))
+    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor, KEY.drafts].map((key) => userScopedKey(key))
     try {
       const values = await getMany(shellKeys, store)
-      const [notes, folders, tags, cursor] = values as [
+      const [notes, folders, tags, cursor, drafts] = values as [
         NoteSummary[] | undefined,
         Folder[] | undefined,
         Tag[] | undefined,
         number | undefined,
+        string[] | undefined,
       ]
       if (
         !Array.isArray(notes) || !notes.every(isNoteSummary) ||
@@ -204,6 +208,7 @@ export const localDb = {
         folders,
         tags,
         cursor,
+        drafts: Array.isArray(drafts) ? drafts.filter((id): id is string => typeof id === 'string') : [],
       }
     } catch {
       return null
@@ -218,6 +223,7 @@ export const localDb = {
           [userScopedKey(KEY.folders, userId), data.folders],
           [userScopedKey(KEY.tags, userId), data.tags],
           [userScopedKey(KEY.cursor, userId), data.cursor],
+          [userScopedKey(KEY.drafts, userId), data.drafts],
         ],
         store,
       )

@@ -345,6 +345,7 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
     const selectionHighlighted = selected && (selectedIds.length > 1 || !active);
     const toggleSelected = useUi((s) => s.toggleSelected);
     const openNote = useNotes((s) => s.openNote);
+    const isDraft = useNotes((s) => s.drafts.has(note.id));
     const patchNote = useNotes((s) => s.patchNote);
     const deleteNote = useNotes((s) => s.deleteNote);
     const restoreNote = useNotes((s) => s.restoreNote);
@@ -534,6 +535,7 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
                       {part.text}
                     </mark>) : (<span key={i}>{part.text}</span>))}
               </h3>
+              {isDraft && (<span title={t('notes.draft_hint')} className="shrink-0 rounded-[var(--r-xs)] border border-[var(--border-subtle)] px-1 text-[10px] leading-[14px] text-[var(--text-quaternary)]">{t('notes.draft')}</span>)}
               {note.isStarred && <Star size={10} className="anim-mark-enter shrink-0 fill-current text-[var(--warning)]"/>}
             </div>
 
