@@ -43,6 +43,19 @@ let logoutPromise: Promise<void> | null = null
 let registrationMutationSequence = 0
 let sessionCacheTask: Promise<void> = Promise.resolve()
 let sessionCacheEpoch = 0
+let loadTask: Promise<void> | null = null
+
+async function clearAttachmentCache(): Promise<void> {
+  if (typeof caches === 'undefined')
+    return
+  try {
+    const keys = await caches.keys()
+    await Promise.all(keys
+      .filter((key) => key.startsWith('inkstone-files-'))
+      .map((key) => caches.delete(key)))
+  } catch {
+  }
+}
 
 export const useSession = create<SessionState>((set, get) => ({
   status: 'loading',
@@ -51,29 +64,11 @@ export const useSession = create<SessionState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   authError: null,
 
-  async load() {
-    const sequence = ++sessionRequestSequence
-    try {
-      const info = await api.session()
-      if (sequence !== sessionRequestSequence) return
-      await persistSession(info)
-      if (sequence !== sessionRequestSequence) return
-      adopt(info, set)
-    } catch (err) {
-      if (sequence !== sessionRequestSequence) return
-      if (err instanceof ApiError && err.isOffline) {
-        const cached = await localDb.loadSession()
-        if (sequence !== sessionRequestSequence) return
-        if (cached?.user) {
-          adopt(cached, set)
-          return
-        }
-      }
-      set({
-        status: 'anonymous',
-        authError: err instanceof ApiError ? err.message : t("session.could_not_connect_to_the_server"),
-      })
-    }
+  load() {
+    if (loadTask)
+      return loadTask
+    loadTask = runLoad(set, get).finally(() => { loadTask = null })
+    return loadTask
   },
 
   async passwordLogin(username, password) {
@@ -245,6 +240,7 @@ export const useSession = create<SessionState>((set, get) => ({
       resetSettingsPersistence(null)
       await pendingSessionCache.catch(() => {})
       await localDb.clear()
+      await clearAttachmentCache()
       set({ status: 'anonymous', user: null, settings: DEFAULT_SETTINGS })
       location.reload()
     })()
@@ -397,6 +393,35 @@ async function persistSession(info: SessionInfo): Promise<void> {
     sessionCacheEpoch++
     await sessionCacheTask.catch(() => {})
     await localDb.clearSession()
+  }
+}
+
+async function runLoad(
+  set: (partial: Partial<SessionState>) => void,
+  get: () => SessionState,
+): Promise<void> {
+  const sequence = ++sessionRequestSequence
+  const cached = await localDb.loadSession()
+  if (sequence !== sessionRequestSequence)
+    return
+  if (cached?.user)
+    adopt(cached, set)
+  try {
+    const info = await api.session()
+    if (sequence !== sessionRequestSequence) return
+    adopt(info, set)
+    if (info.user)
+      void persistSession(info).catch(() => {})
+    else
+      await persistSession(info)
+  } catch (err) {
+    if (sequence !== sessionRequestSequence) return
+    if (err instanceof ApiError && err.isOffline && get().status === 'authed')
+      return
+    set({
+      status: 'anonymous',
+      authError: err instanceof ApiError ? err.message : t("session.could_not_connect_to_the_server"),
+    })
   }
 }
 

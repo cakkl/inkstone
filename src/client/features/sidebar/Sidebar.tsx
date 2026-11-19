@@ -9,7 +9,6 @@ import { Avatar, IconButton, Logo, SectionLabel } from '../../components/primiti
 import { Menu, Tooltip, confirm, useContextMenu, type MenuItem } from '../../components/overlay';
 import { switchThemeWithTransition, useUi } from '../../store/ui';
 import { useSession } from '../../store/session';
-import { useUpdate } from '../../store/update';
 import { createContextualNote, useFolderTree, useNavigationCounts, useNotes, type FolderNode } from '../../store/notes';
 import { folderDescendantIds, folderPath, folderPathLabel, openFolderView } from '../../lib/folders';
 import { FolderAppearance, FolderPicker } from '../folders/FolderPicker';
@@ -119,7 +118,6 @@ function SidebarAccount({ rail = false }: {
     const updateSettings = useSession((s) => s.updateSettings);
     const logout = useSession((s) => s.logout);
     const openPanel = useUi((s) => s.openPanel);
-    const updateAvailable = useUpdate((s) => s.available);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const [menuOpen, setMenuOpen] = useState(false);
     if (!user)
@@ -131,7 +129,7 @@ function SidebarAccount({ rail = false }: {
         {
             id: 'settings',
             label: t("common.settings"),
-            icon: <SettingsIcon size={13} showDot={user.role === 'owner' && updateAvailable}/>,
+            icon: <SettingsIcon size={13}/>,
             combo: APP_SHORTCUTS.settings,
             onSelect: () => openPanel('settings'),
         },
@@ -180,7 +178,7 @@ function SidebarAccount({ rail = false }: {
           </button>
           <Tooltip label={t("common.settings")} side="top">
             <IconButton label={t("common.settings")} size="sm" onClick={() => openPanel('settings')} className="mr-1 shrink-0 text-[var(--text-quaternary)] group-hover:text-[var(--text-tertiary)]">
-              <SettingsIcon size={14} showDot={user.role === 'owner' && updateAvailable}/>
+              <SettingsIcon size={14}/>
             </IconButton>
           </Tooltip>
         </div>)}
@@ -188,13 +186,11 @@ function SidebarAccount({ rail = false }: {
       <Menu anchor={buttonRef} open={menuOpen} onClose={() => setMenuOpen(false)} items={items} width={252}/>
     </>);
 }
-function SettingsIcon({ size, showDot }: {
+function SettingsIcon({ size }: {
     size: number;
-    showDot: boolean;
 }) {
-    return (<span className="relative inline-flex">
+    return (<span className="inline-flex">
       <Settings size={size}/>
-      {showDot && (<span data-update-dot aria-hidden="true" className="absolute -top-1 -right-1 size-2 rounded-full border border-[var(--bg-sunken)] bg-[var(--danger)]"/>)}
     </span>);
 }
 function ViewItem({ icon, label, view, count, active, onSelect, }: {
@@ -293,7 +289,8 @@ export function FolderSection({ mobile = false }: { mobile?: boolean }) {
                 currentUi.activeNoteId === startingNavigation.activeNoteId) {
                 if (parentId)
                     expandFolder(parentId);
-                if (!mobile) useUi.getState().openExplorer(folderId);
+                if (!mobile)
+                    useUi.getState().openExplorer(folderId, { closeDrawer: false });
                 setRenamingId(folderId);
             }
         }
@@ -521,8 +518,23 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
         { id: 'move-out', label: t("sidebar.move_out_one_level"), icon: <CornerUpLeft size={13}/>, disabled: !parentNode, onSelect: moveOut },
         { id: 'delete', label: t("sidebar.delete_folder"), icon: <Trash2 size={13}/>, tone: 'danger', separatorBefore: true, onSelect: () => void remove() },
     ];
+    const activate = () => {
+        if (mobile) {
+            openFolderView(folders, node.id);
+            return;
+        }
+        useUi.getState().openExplorer(node.id, { closeDrawer: false });
+        toggleFolder(node.id);
+    };
     return (<div role="treeitem" aria-level={node.depth + 1} aria-expanded={hasChildren ? expanded : undefined} className={cn(justCreated && 'anim-tree-item-enter')} data-new-folder={justCreated || undefined}>
-      <div ref={buttonRef} data-folder-drop-target onContextMenu={(event) => {
+      <div ref={buttonRef} data-folder-drop-target data-navigation-item={mobile || undefined} onClick={(event) => {
+            if (renaming)
+                return;
+            const target = event.target as HTMLElement;
+            if (target.closest('button,input'))
+                return;
+            activate();
+        }} onContextMenu={(event) => {
             setMenuOpen(false);
             menu.onContextMenu(event);
         }} onDragOver={(e) => {
@@ -568,7 +580,7 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
         }} draggable={!renaming} onDragStart={(e) => {
             e.dataTransfer.setData('application/x-inkstone-folder', node.id);
             e.dataTransfer.effectAllowed = 'move';
-        }} className={cn('group relative flex h-11 items-center gap-1 rounded-[var(--r-md)] pr-1 md:h-[30px]', 'transition-colors duration-[var(--dur-fast)]', active
+        }} className={cn('group relative flex h-11 cursor-pointer items-center gap-1 rounded-[var(--r-md)] pr-1 md:h-[30px]', 'transition-colors duration-[var(--dur-fast)]', active
             ? 'text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]', dropState === 'inside' && 'ring-1 ring-[var(--accent)]')} style={{ paddingLeft: 6 + node.depth * 13 }}>
         {dropState === 'before' && <span aria-hidden="true" className="pointer-events-none absolute top-0 right-1 left-1 h-px bg-[var(--accent)]"/>}
@@ -595,13 +607,7 @@ function FolderRow({ node, notesByFolder, mobile, canOpenToSide, siblings, index
                 }
                 e.stopPropagation();
             }} className="min-w-0 flex-1 rounded-[var(--r-xs)] border border-[var(--accent)] bg-[var(--bg-surface)] px-1 py-px text-[12.5px] outline-none"/>) : (<Tooltip label={folderPathLabel(folders, node.id)} side="right">
-            <button data-navigation-item={mobile || undefined} type="button" aria-current={active ? 'page' : undefined} onClick={() => {
-                if (mobile) openFolderView(folders, node.id);
-                else {
-                    useUi.getState().openExplorer(node.id);
-                    toggleFolder(node.id);
-                }
-            }} onDoubleClick={() => onStartRename(node.id)} className="min-w-0 flex-1 truncate py-1 text-left text-[12.5px] font-medium">
+            <button data-navigation-item={mobile || undefined} type="button" aria-current={active ? 'page' : undefined} onClick={activate} onDoubleClick={() => onStartRename(node.id)} className="min-w-0 flex-1 truncate py-1 text-left text-[12.5px] font-medium cursor-pointer">
               {node.name}
             </button>
           </Tooltip>)}

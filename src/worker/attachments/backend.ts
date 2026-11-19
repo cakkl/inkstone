@@ -40,7 +40,7 @@ export async function putAttachmentObject(
   if (storage === 'r2') {
     if (!env.FILES) throw new Error('R2 attachment storage is not configured')
     await env.FILES.put(key, bytes, {
-      httpMetadata: { contentType: metadata.mime, cacheControl: 'private, no-store' },
+      httpMetadata: { contentType: metadata.mime, cacheControl: 'private, max-age=31536000, immutable' },
       customMetadata: {
         userId: metadata.userId,
         objectId: metadata.objectId,

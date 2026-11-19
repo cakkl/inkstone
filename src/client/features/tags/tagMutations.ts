@@ -17,6 +17,12 @@ interface TagColorWrite {
 
 const tagColorWrites = new Map<string, TagColorWrite>()
 
+function requireOnlineTags(): boolean {
+  if (useNotes.getState().online) return true
+  useUi.getState().toast({ title: t('tags.offline_unavailable'), tone: 'danger' })
+  return false
+}
+
 export function normalizeTagName(value: string): string | null {
   const name = value.trim().replace(/^#+/, '')
   if (!name || /[\s#]/.test(name) || name.length > LIMITS.tagNameMaxLength) return null
@@ -29,6 +35,7 @@ export function createTag(value: string): string | null {
     useUi.getState().toast({ title: t('tags.invalid_name'), tone: 'danger' })
     return null
   }
+  if (!requireOnlineTags()) return null
   const existing = useNotes.getState().tags.find((tag) =>
     tag.name.localeCompare(name, undefined, { sensitivity: 'base' }) === 0)
   if (existing) return existing.id
@@ -61,6 +68,7 @@ export async function renameTag(tag: Tag, value: string): Promise<void> {
     useUi.getState().toast({ title: t('tags.invalid_name'), tone: 'danger' })
     return
   }
+  if (!requireOnlineTags()) return
   if (next === tag.name) return
   const tags = useNotes.getState().tags
   const target = tags.find((candidate) => candidate.id !== tag.id
@@ -125,6 +133,7 @@ export async function deleteTag(tag: Tag): Promise<void> {
     confirmLabel: t('tags.delete'),
   })
   if (!ok) return
+  if (!requireOnlineTags()) return
 
   const before = useNotes.getState()
   const beforeUi = useUi.getState()

@@ -132,9 +132,20 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const [mobileOutlineOpen, setMobileOutlineOpen] = useState(false);
     const [containerWidth, setContainerWidth] = useState(0);
     const isMobile = breakpoint === 'mobile';
+    const isDraftNote = useNotes((s) => (note ? s.drafts.has(note.id) : false));
+    const online = useNotes((s) => s.online);
+    const serverOnlyReason = isDraftNote
+        ? t("notes.draft_unavailable")
+        : !online ? t("common.offline_unavailable") : null;
+    const serverOnlyDisabled = serverOnlyReason !== null;
     const paneActive = !grouped || pane === 'active' || activeWorkspacePane === pane;
     const mobilePane = useUi((s) => s.mobilePane);
-    const layout = isMobile ? (mobilePane === 'preview' ? 'preview' : 'live') : grouped && pane !== 'active'
+    const notePaneMode = useRef<'live' | 'preview'>(mobilePane === 'preview' ? 'preview' : 'live');
+    if (mobilePane === 'preview')
+        notePaneMode.current = 'preview';
+    else if (mobilePane === 'editor')
+        notePaneMode.current = 'live';
+    const layout = isMobile ? notePaneMode.current : grouped && pane !== 'active'
             ? workspacePaneLayouts[pane]
             : settings.preview.layout;
     const showEditor = layout !== 'preview';
@@ -285,15 +296,18 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         if (!note)
             return;
         const payload = { title: note.title, content };
-        if (format === 'md') {
-            exportNoteAsMarkdown(payload);
-            return;
-        }
         try {
-            if (format === 'html')
+            if (format === 'md') {
+                const images = await exportNoteAsMarkdown(payload);
+                if (images)
+                    toast({ title: t("workspace.export_markdown_bundle", { value0: images }) });
+            }
+            else if (format === 'html') {
                 await exportNoteAsHtml(payload, locale);
-            else
+            }
+            else {
                 await exportNoteAsPdf(payload, locale);
+            }
         }
         catch (err) {
             toast({
@@ -311,18 +325,20 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const mobileItems: MenuItem[] = [
         ...(isMobile ? [
             { id: 'star', label: note.isStarred ? t("common.remove_from_favorites") : t("navigation.favorites"), checked: note.isStarred, onSelect: () => void patchNote(note.id, { isStarred: !note.isStarred }) },
-            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, onSelect: toggleBacklinks },
+            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, disabled: isDraftNote, onSelect: toggleBacklinks },
         ] : []),
         {
             id: 'versions',
             label: t("common.version_history"),
             icon: <History size={13}/>,
+            disabled: serverOnlyDisabled,
             onSelect: () => openPanel('versions'),
         },
         {
             id: 'share',
             label: t("workspace.share"),
             icon: <Share2 size={13}/>,
+            disabled: serverOnlyDisabled,
             onSelect: () => openPanel('share'),
         },
         {
@@ -455,14 +471,14 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
               <Star size={14} className={note.isStarred ? 'fill-current' : undefined}/>
             </IconButton>
           </Tooltip>
-          <Tooltip label={t("common.backlinks")}>
-            <IconButton label={t("common.backlinks")} size="sm" active={backlinksOpen} onClick={toggleBacklinks}>
+          <Tooltip label={isDraftNote ? t("notes.draft_unavailable") : t("common.backlinks")} disabled={isDraftNote}>
+            <IconButton label={t("common.backlinks")} size="sm" active={backlinksOpen} disabled={isDraftNote} onClick={toggleBacklinks}>
               <LinkIcon size={14}/>
             </IconButton>
           </Tooltip>
           </>}
-          {!isMobile && (<Tooltip label={t("common.version_history")}>
-              <IconButton label={t("common.version_history")} size="sm" onClick={() => openPanel('versions')}>
+          {!isMobile && (<Tooltip label={serverOnlyReason ?? t("common.version_history")} disabled={serverOnlyDisabled}>
+              <IconButton label={t("common.version_history")} size="sm" disabled={serverOnlyDisabled} onClick={() => openPanel('versions')}>
                 <History size={14}/>
               </IconButton>
             </Tooltip>)}
@@ -479,8 +495,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 {(isMobile ? mobileOutlineOpen : outlineOpen) ? <PanelRightClose size={14}/> : <ListTree size={14}/>}
               </IconButton>
             </Tooltip>)}
-          {!isMobile && (<Tooltip label={t("workspace.share")}>
-              <IconButton label={t("workspace.share")} size="sm" onClick={() => openPanel('share')}>
+          {!isMobile && (<Tooltip label={serverOnlyReason ?? t("workspace.share")} disabled={serverOnlyDisabled}>
+              <IconButton label={t("workspace.share")} size="sm" disabled={serverOnlyDisabled} onClick={() => openPanel('share')}>
                 <Share2 size={14}/>
               </IconButton>
             </Tooltip>)}

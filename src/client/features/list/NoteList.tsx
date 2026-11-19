@@ -33,8 +33,8 @@ const EMPTY_HIGHLIGHT: [
     number,
     number
 ][] = [];
-const INITIAL_RENDERED_NOTES = 180;
-const RENDERED_NOTES_STEP = 240;
+const INITIAL_RENDERED_NOTES = 60;
+const RENDERED_NOTES_STEP = 120;
 export function NoteList() {
     const locale = useLocale();
     const breakpoint = useBreakpoint();
@@ -56,6 +56,7 @@ export function NoteList() {
     const tags = useNotes((s) => s.tags);
     const loading = useNotes((s) => s.loading);
     const hydrated = useNotes((s) => s.hydrated);
+    const online = useNotes((s) => s.online);
     const openNote = useNotes((s) => s.openNote);
     const { emptyTrash, emptyingTrash } = useEmptyTrash();
     const [filter, setFilter] = useState('');
@@ -80,6 +81,10 @@ export function NoteList() {
             setRemote(null);
             return;
         }
+        if (!online) {
+            setRemote(null);
+            return;
+        }
         const controller = new AbortController();
         api.search(debouncedFilter, 100, controller.signal).then((response) => {
             if (!controller.signal.aborted) setRemote({ query: debouncedFilter, results: response.results });
@@ -87,7 +92,7 @@ export function NoteList() {
             if (!controller.signal.aborted) setRemote({ query: debouncedFilter, results: [], failed: true });
         });
         return () => controller.abort();
-    }, [searchList, debouncedFilter]);
+    }, [searchList, debouncedFilter, online]);
     const title = useMemo(() => {
         if (searchList) return t('shell.search_all_notes');
         if (view === 'folder')
@@ -303,7 +308,7 @@ export function NoteList() {
 
         {breakpoint === 'mobile' && <MobileLibraryFilters />}
 
-        {view === 'trash' && notes.length > 0 && (<button type="button" disabled={emptyingTrash} aria-busy={emptyingTrash} onClick={() => void emptyTrash()} className="mt-2 w-full rounded-[var(--r-md)] border border-[var(--border-subtle)] py-1.5 text-[11.5px] text-[var(--text-tertiary)] transition-colors hover:border-[var(--danger)] hover:text-[var(--danger)] disabled:pointer-events-none disabled:opacity-50">{t("notes.empty_trash")}{notes.length}{t("notes.notes_93aeb9")}</button>)}
+        {view === 'trash' && notes.length > 0 && (<button type="button" disabled={emptyingTrash || !online} title={online ? undefined : t("common.offline_unavailable")} aria-busy={emptyingTrash} onClick={() => void emptyTrash()} className="mt-2 w-full rounded-[var(--r-md)] border border-[var(--border-subtle)] py-1.5 text-[11.5px] text-[var(--text-tertiary)] transition-colors hover:border-[var(--danger)] hover:text-[var(--danger)] disabled:pointer-events-none disabled:opacity-50">{t("notes.empty_trash")}{notes.length}{t("notes.notes_93aeb9")}</button>)}
       </header>
 
       <div key={`${view}:${folderId ?? ''}:${tag ?? ''}`} ref={listRef} data-note-list role="listbox" aria-label={title} aria-multiselectable="true" aria-activedescendant={activeNoteId && renderedIds.has(activeNoteId) ? `note-option-${activeNoteId}` : undefined} tabIndex={0} onKeyDown={onKeyDown} className="anim-view-content min-h-0 flex-1 overflow-y-auto px-2 pb-4 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--accent)]">
@@ -345,6 +350,7 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
     const selectionHighlighted = selected && (selectedIds.length > 1 || !active);
     const toggleSelected = useUi((s) => s.toggleSelected);
     const openNote = useNotes((s) => s.openNote);
+    const isDraft = useNotes((s) => s.drafts.has(note.id));
     const patchNote = useNotes((s) => s.patchNote);
     const deleteNote = useNotes((s) => s.deleteNote);
     const restoreNote = useNotes((s) => s.restoreNote);
@@ -390,15 +396,18 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
             }
         }
         const payload = { title: note.title, content };
-        if (format === 'md') {
-            exportNoteAsMarkdown(payload);
-            return;
-        }
         try {
-            if (format === 'html')
+            if (format === 'md') {
+                const images = await exportNoteAsMarkdown(payload);
+                if (images)
+                    toast({ title: t("workspace.export_markdown_bundle", { value0: images }) });
+            }
+            else if (format === 'html') {
                 await exportNoteAsHtml(payload, locale);
-            else
+            }
+            else {
                 await exportNoteAsPdf(payload, locale);
+            }
         }
         catch (err) {
             toast({
@@ -534,6 +543,7 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
                       {part.text}
                     </mark>) : (<span key={i}>{part.text}</span>))}
               </h3>
+              {isDraft && (<span title={t('notes.draft_hint')} className="shrink-0 rounded-[var(--r-xs)] border border-[var(--border-subtle)] px-1 text-[10px] leading-[14px] text-[var(--text-quaternary)]">{t('notes.draft')}</span>)}
               {note.isStarred && <Star size={10} className="anim-mark-enter shrink-0 fill-current text-[var(--warning)]"/>}
             </div>
 

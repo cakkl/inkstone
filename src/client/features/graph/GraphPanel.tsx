@@ -18,7 +18,7 @@ import {
 import type { GraphNode, GraphQuery, GraphResponse } from '@shared/types'
 import { organizerColorOrNull } from '@shared/organizer-colors'
 import { truncateText } from '@shared/text-utils'
-import { api } from '../../lib/api'
+import { buildGraph } from '../../lib/graph'
 import { Button, IconButton } from '../../components/primitives'
 import { Menu, Tooltip, useDialogFocus, useEscape, useLockScroll, type MenuItem } from '../../components/overlay'
 import { Empty, LoadingBlock } from '../../components/feedback'
@@ -128,28 +128,6 @@ function nodeColor(node: CanvasNode, groupBy: GroupBy, fallback: string): string
   return fallback
 }
 
-function normalizedResponse(response: GraphResponse): GraphResponse {
-  const nodes = response.nodes.map((node) => ({
-    ...node,
-    kind: node.kind ?? 'note',
-    inDegree: node.inDegree ?? 0,
-    outDegree: node.outDegree ?? 0,
-    folderId: node.folderId ?? null,
-    folderName: node.folderName ?? null,
-    folderColor: node.folderColor ?? null,
-    tags: node.tags ?? [],
-  }))
-  return {
-    nodes,
-    edges: response.edges,
-    meta: response.meta ?? {
-      mode: 'global', centerId: null, depth: 1,
-      totalNodes: nodes.length, totalEdges: response.edges.length,
-      truncated: false, limit: nodes.length,
-    },
-  }
-}
-
 export function GraphPanel({ onClose }: { onClose: () => void }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -168,6 +146,8 @@ export function GraphPanel({ onClose }: { onClose: () => void }) {
   const createNote = useNotes((state) => state.createNote)
   const folders = useNotes((state) => state.folders ?? [])
   const tags = useNotes((state) => state.tags ?? [])
+  const noteIndex = useNotes((state) => state.notes)
+  const linkIndex = useNotes((state) => state.links)
   const activeNoteId = useUi((state) => state.activeNoteId)
   const hoverRef = useRef<CanvasNode | null>(null)
   const selectedIdRef = useRef<string | null>(null)
@@ -214,22 +194,9 @@ export function GraphPanel({ onClose }: { onClose: () => void }) {
       setLoadError(t('graph.local_requires_note'))
       return
     }
-    const controller = new AbortController()
-    let cancelled = false
-    setData(null)
     setLoadError(null)
-    api.graph(request, controller.signal).then((response) => {
-      if (!cancelled) setData(normalizedResponse(response))
-    }).catch((error) => {
-      if (!cancelled && (error as Error)?.name !== 'AbortError') {
-        setLoadError(error instanceof Error ? error.message : String(error))
-      }
-    })
-    return () => {
-      cancelled = true
-      controller.abort()
-    }
-  }, [request, reload])
+    setData(buildGraph(request, { notes: noteIndex, links: linkIndex, folders, tags }))
+  }, [request, reload, noteIndex, linkIndex, folders, tags])
 
   useEffect(() => {
     activeNoteIdRef.current = activeNoteId
@@ -639,7 +606,7 @@ export function GraphPanel({ onClose }: { onClose: () => void }) {
           <GraphSelect label={t('graph.tag')} value={prefs.tag} onChange={(value) => changePref('tag', value)} options={[['', t('graph.all_tags')], ...tags.map((item) => [item.name, item.name] as [string, string])]}/>
           <GraphToggle label={t('graph.show_orphans')} checked={prefs.includeOrphans} onChange={(value) => changePref('includeOrphans', value)}/>
           <GraphToggle label={t('graph.show_unresolved')} checked={prefs.includeUnresolved} onChange={(value) => changePref('includeUnresolved', value)}/>
-          {prefs.mode === 'local' && <GraphSelect label={t('graph.depth')} value={String(prefs.depth)} onChange={(value) => changePref('depth', Number(value))} options={[["1", '1'], ["2", '2'], ["3", '3']]}/>} 
+          {prefs.mode === 'local' && <GraphSelect label={t('graph.depth')} value={String(prefs.depth)} onChange={(value) => changePref('depth', Number(value))} options={[["1", '1'], ["2", '2'], ["3", '3']]}/>}
         </GraphSection>
         <GraphSection icon={<Network size={13}/>} title={t('graph.appearance')}>
           <GraphSelect label={t('graph.group_by')} value={prefs.groupBy} onChange={(value) => changePref('groupBy', value as GroupBy)} options={[["none", t('graph.group_none')], ["folder", t('graph.folder')], ["tag", t('graph.tag')]]}/>

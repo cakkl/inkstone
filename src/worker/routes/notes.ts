@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { LIMITS } from '@shared/constants'
 import { countText, deriveExcerpt, extractTags, normalizeLinkKey, replaceWikiLinkTarget } from '@shared/markdown-utils'
-import { duplicateNoteTitle, sliceText, truncateText, utf8ByteLength } from '@shared/text-utils'
+import { duplicateNoteTitle, linkContext, truncateText, utf8ByteLength } from '@shared/text-utils'
 import type {
   CreateNoteBody,
   ListNotesResponse,
@@ -987,19 +987,6 @@ async function loadNoteRow(db: D1Database, userId: string, id: string): Promise<
     .first<NoteRow>()
   if (!row) throw ApiError.notFound('Note not found')
   return row
-}
-
-function linkContext(content: string, title: string): string {
-  const needle = `[[${title}`
-  const idx = content.toLowerCase().indexOf(needle.toLowerCase())
-  if (idx < 0) return truncateText(content, 120).replace(/\s+/g, ' ').trim()
-  const start = Math.max(0, idx - 60)
-  const end = Math.min(content.length, idx + needle.length + 90)
-  return (
-    (start > 0 ? '…' : '') +
-    sliceText(content, start, end).replace(/\s+/g, ' ').trim() +
-    (end < content.length ? '…' : '')
-  )
 }
 
 async function rewriteInboundWikiLinks(

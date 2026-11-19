@@ -70,17 +70,6 @@ export interface TotpRecoveryCodesResult {
   generatedAt: number
 }
 
-export type UpdateCheckStatus = 'ok' | 'unavailable'
-
-export interface UpdateCheckResponse {
-  currentVersion: string
-  latestVersion: string | null
-  updateUrl: string | null
-  checkedAt: number | null
-  status: UpdateCheckStatus
-}
-
-
 export type ThemePref = 'light' | 'dark' | 'system'
 export type AppLocale = 'zh-CN' | 'en-US'
 export type AccentName = 'cinnabar' | 'indigo' | 'celadon' | 'amber' | 'terracotta' | 'wisteria' | 'graphite'
@@ -351,6 +340,13 @@ export interface SyncDeletion {
   id: string
 }
 
+export interface SyncLink {
+  sourceId: string
+  targetKey: string
+  targetTitle: string
+  targetId: string | null
+}
+
 export interface SyncResponse {
   cursor: number
   full: boolean
@@ -367,6 +363,7 @@ export interface SyncResponse {
   notes: NoteSummary[]
   folders: Folder[]
   tags: Tag[]
+  links?: SyncLink[]
   deletions: SyncDeletion[]
   serverTime: number
 }

@@ -84,7 +84,7 @@ interface UiState {
   toggleNavDrawer: (open?: boolean) => void
   toggleList: () => void
   openSearchList: () => void
-  openExplorer: (folderId?: string | null) => void
+  openExplorer: (folderId?: string | null, options?: { closeDrawer?: boolean }) => void
   setMobilePane: (pane: UiState['mobilePane']) => void
   openView: (view: ViewKind, options?: { folderId?: string | null; tag?: string | null }) => void
   setSort: (sort: SortKey, order?: SortOrder) => void
@@ -415,10 +415,11 @@ export const useUi = create<UiState>((set, get) => ({
     searchList: true, searchRequest: s.searchRequest + 1, listCollapsed: false,
     mobilePane: 'list', navDrawerOpen: false, panel: null,
   })),
-  openExplorer: (folderId = null) => set({
+  openExplorer: (folderId = null, options) => set((state) => ({
     view: folderId ? 'folder' : 'all', folderId, tag: null,
-    searchList: false, listCollapsed: true, selectedIds: [], navDrawerOpen: false,
-  }),
+    searchList: false, listCollapsed: true, selectedIds: [],
+    navDrawerOpen: options?.closeDrawer === false ? state.navDrawerOpen : false,
+  })),
   setMobilePane: (mobilePane) => set({ mobilePane }),
 
   openView: (view, options) =>

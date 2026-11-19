@@ -412,12 +412,13 @@ export function useContextMenu() {
         },
     };
 }
-export function Tooltip({ label, combo, children, side = 'bottom', delay = 420, }: {
+export function Tooltip({ label, combo, children, side = 'bottom', delay = 420, disabled = false, }: {
     label: ReactNode;
     combo?: string;
     children: ReactNode;
     side?: 'top' | 'bottom' | 'left' | 'right';
     delay?: number;
+    disabled?: boolean;
 }) {
     const holderRef = useRef<HTMLSpanElement>(null);
     const tooltipRef = useRef<HTMLDivElement>(null);
@@ -482,7 +483,7 @@ export function Tooltip({ label, combo, children, side = 'bottom', delay = 420, 
         }} onMouseLeave={hide} onFocus={(event) => {
             if ((event.target as HTMLElement).matches(':focus-visible'))
                 show();
-        }} onBlur={hide} className="contents">
+        }} onBlur={hide} className={disabled ? 'inline-flex items-center' : 'contents'}>
         {children}
       </span>
       {rect &&

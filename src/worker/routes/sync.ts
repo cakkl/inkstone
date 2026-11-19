@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { LIMITS } from '@shared/constants'
-import type { SyncDeletion, SyncResponse } from '@shared/types'
+import type { SyncDeletion, SyncLink, SyncResponse } from '@shared/types'
 import type { AppBindings } from '../env'
 import { NOTE_COLUMNS, toFolder, toNoteSummary, toTag, type FolderRow, type NoteRow, type TagRow } from '../db/rows'
 import { ApiError } from '../lib/errors'
@@ -15,16 +15,9 @@ export const CHANGE_BOUNDS_SQL = `SELECT
 
 const FOLDER_SELECT = `f.id, f.parent_id, f.name, f.icon, f.color, f.position, f.created_at, f.updated_at`
 
-// 一次 GROUP BY 优于逐标签相关子查询（后者退化为「标签数 × 笔记数」扇出）。
-const TAG_SELECT = `t.id, t.name, t.color, t.created_at, COALESCE(c.note_count, 0) AS note_count`
-const TAG_SOURCE = `tags t
-  LEFT JOIN (
-    SELECT nt.tag_id AS tag_id, COUNT(*) AS note_count
-      FROM note_tags nt
-      JOIN notes n ON n.id = nt.note_id
-     WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.is_archived = 0
-     GROUP BY nt.tag_id
-  ) c ON c.tag_id = t.id`
+// 标签计数改由客户端从本地笔记派生，这里不再做 note_tags 聚合。
+const TAG_SELECT = `t.id, t.name, t.color, t.created_at`
+const TAG_SOURCE = `tags t`
 
 
 syncRoutes.get('/', requireAuth, async (c) => {
@@ -180,6 +173,7 @@ syncRoutes.get('/', requireAuth, async (c) => {
     notes: notes.map(toNoteSummary),
     folders: folders.map(toFolder),
     tags: tags.map(toTag),
+    links: await loadLinks(c.env.DB, userId, notes.map((note) => note.id)),
     deletions,
     serverTime: Date.now(),
   }
@@ -257,6 +251,7 @@ async function fullSnapshot(
     notes: pageNotes.map(toNoteSummary),
     folders: folders.results.map(toFolder),
     tags: tags.results.map(toTag),
+    links: await loadLinks(db, userId, pageNotes.map((note) => note.id)),
     deletions: [],
     serverTime: Date.now(),
   }
@@ -264,6 +259,25 @@ async function fullSnapshot(
 
 function placeholders(count: number, start: number): string {
   return Array.from({ length: count }, (_, i) => `?${start + i}`).join(', ')
+}
+
+async function loadLinks(db: D1Database, userId: string, sourceIds: string[]): Promise<SyncLink[]> {
+  if (!sourceIds.length) return []
+  const rows = await loadInChunks(sourceIds, (ids) =>
+    db.prepare(
+      `SELECT source_note_id, target_key, target_title, target_note_id FROM links
+        WHERE user_id = ?1 AND source_note_id IN (${placeholders(ids.length, 2)})
+        ORDER BY source_note_id ASC, target_key ASC`,
+    )
+      .bind(userId, ...ids)
+      .all<{ source_note_id: string; target_key: string; target_title: string; target_note_id: string | null }>(),
+  )
+  return rows.map((row) => ({
+    sourceId: row.source_note_id,
+    targetKey: row.target_key,
+    targetTitle: row.target_title,
+    targetId: row.target_note_id,
+  }))
 }
 
 async function loadInChunks<T>(

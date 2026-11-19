@@ -79,6 +79,7 @@ export function requestOfflineWarmup(): void {
 
 async function registerServiceWorker(): Promise<void> {
   try {
+    void navigator.storage?.persist?.().catch(() => {})
     const wasControlled = Boolean(navigator.serviceWorker.controller)
     const registration = await navigator.serviceWorker.register('/sw.js', {
       scope: '/',

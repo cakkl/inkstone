@@ -1,7 +1,7 @@
 import { clear as clearStore, createStore, del, get, getMany, set, setMany, update } from 'idb-keyval'
 import * as idbKeyval from 'idb-keyval'
 import type { UseStore } from 'idb-keyval'
-import type { Folder, Note, NoteSummary, PublicUser, SessionInfo, SiteInfo, Tag } from '@shared/types'
+import type { Folder, Note, NoteSummary, PublicUser, SessionInfo, SiteInfo, SyncLink, Tag } from '@shared/types'
 import { CLIENT_DATABASE_NAME } from './runtime'
 
 const optionalIdbExport = (name: string): unknown => Object.prototype.hasOwnProperty.call(idbKeyval, name)
@@ -16,9 +16,13 @@ const KEY = {
   notes: 'notes',
   folders: 'folders',
   tags: 'tags',
+  links: 'links',
   cursor: 'cursor',
+  drafts: 'drafts',
   content: (id: string) => `note:${id}`,
   outbox: 'outbox',
+  folderOutbox: 'folder-outbox',
+  notePatchOutbox: 'note-patch-outbox',
   outboxReplayLease: 'outboxReplayLease',
   userId: 'userId',
   session: 'session',
@@ -29,6 +33,8 @@ interface ShellData {
   folders: Folder[]
   tags: Tag[]
   cursor: number
+  drafts: string[]
+  links: Record<string, SyncLink[]>
 }
 
 /** 跨标签页重放锁的最长等待时间；超时后调用方退回到「只刷新待办计数」。 */
@@ -51,6 +57,31 @@ export interface OutboxItem {
   attempts: number
   createdAt: number
   lastError?: string
+}
+
+export interface FolderOutboxItem {
+  id: string
+  kind: 'create' | 'patch'
+  folderId: string
+  createdAt: number
+  name?: string
+  parentId?: string | null
+  icon?: string | null
+  color?: string | null
+  patch?: {
+    name?: string
+    parentId?: string | null
+    beforeId?: string | null
+    icon?: string | null
+    color?: string | null
+  }
+}
+
+export interface NotePatchOutboxItem {
+  noteId: string
+  kind: 'patch' | 'delete' | 'restore'
+  patch: Record<string, unknown>
+  createdAt: number
 }
 
 export interface CachedNoteContent {
@@ -79,6 +110,56 @@ function normalizeOutbox(value: unknown): OutboxItem[] {
       typeof candidate.createdAt === 'number' &&
       Number.isFinite(candidate.createdAt)
   })
+}
+
+function normalizeFolderOutbox(value: unknown): FolderOutboxItem[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is FolderOutboxItem => {
+    if (!item || typeof item !== 'object') return false
+    const candidate = item as Partial<FolderOutboxItem>
+    return typeof candidate.id === 'string' &&
+      (candidate.kind === 'create' || candidate.kind === 'patch') &&
+      typeof candidate.folderId === 'string' &&
+      typeof candidate.createdAt === 'number' &&
+      Number.isFinite(candidate.createdAt)
+  })
+}
+
+function isCancellingNoteIntent(previous: NotePatchOutboxItem['kind'], next: NotePatchOutboxItem['kind']): boolean {
+  return (previous === 'delete' && next === 'restore') || (previous === 'restore' && next === 'delete')
+}
+
+function normalizeNotePatchOutbox(value: unknown): NotePatchOutboxItem[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is NotePatchOutboxItem => {
+    if (!item || typeof item !== 'object') return false
+    const candidate = item as Partial<NotePatchOutboxItem>
+    const kind = candidate.kind ?? 'patch'
+    return typeof candidate.noteId === 'string' &&
+      (kind === 'patch' || kind === 'delete' || kind === 'restore') &&
+      Boolean(candidate.patch) &&
+      typeof candidate.patch === 'object' &&
+      !Array.isArray(candidate.patch) &&
+      typeof candidate.createdAt === 'number' &&
+      Number.isFinite(candidate.createdAt)
+  })
+}
+
+function normalizeNoteLinks(value: unknown): Record<string, SyncLink[]> {
+  if (!isRecord(value)) return {}
+  const result: Record<string, SyncLink[]> = {}
+  for (const [sourceId, group] of Object.entries(value)) {
+    if (!Array.isArray(group)) continue
+    const links = group.filter((item): item is SyncLink => {
+      if (!isRecord(item)) return false
+      return typeof item.sourceId === 'string' &&
+        typeof item.targetKey === 'string' &&
+        typeof item.targetTitle === 'string' &&
+        (item.targetId === null || typeof item.targetId === 'string')
+    })
+    if (links.length) result[sourceId] = links
+  }
+  return result
 }
 
 async function safeGet<T>(key: string): Promise<T | undefined> {
@@ -181,15 +262,19 @@ export const localDb = {
     folders: Folder[]
     tags: Tag[]
     cursor: number
+    drafts: string[]
+    links: Record<string, SyncLink[]>
   } | null> {
-    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor].map((key) => userScopedKey(key))
+    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor, KEY.drafts, KEY.links].map((key) => userScopedKey(key))
     try {
       const values = await getMany(shellKeys, store)
-      const [notes, folders, tags, cursor] = values as [
+      const [notes, folders, tags, cursor, drafts, links] = values as [
         NoteSummary[] | undefined,
         Folder[] | undefined,
         Tag[] | undefined,
         number | undefined,
+        string[] | undefined,
+        unknown,
       ]
       if (
         !Array.isArray(notes) || !notes.every(isNoteSummary) ||
@@ -204,6 +289,8 @@ export const localDb = {
         folders,
         tags,
         cursor,
+        drafts: Array.isArray(drafts) ? drafts.filter((id): id is string => typeof id === 'string') : [],
+        links: normalizeNoteLinks(links),
       }
     } catch {
       return null
@@ -218,6 +305,8 @@ export const localDb = {
           [userScopedKey(KEY.folders, userId), data.folders],
           [userScopedKey(KEY.tags, userId), data.tags],
           [userScopedKey(KEY.cursor, userId), data.cursor],
+          [userScopedKey(KEY.drafts, userId), data.drafts],
+          [userScopedKey(KEY.links, userId), data.links],
         ],
         store,
       )
@@ -261,6 +350,56 @@ export const localDb = {
   dropContent: (id: string) => del(userScopedKey(KEY.content(id)), store).catch(() => {}),
 
   getOutbox: async (): Promise<OutboxItem[]> => normalizeOutbox(await safeGet<unknown>(userScopedKey(KEY.outbox))),
+
+  getFolderOutbox: async (): Promise<FolderOutboxItem[]> =>
+    normalizeFolderOutbox(await safeGet<unknown>(userScopedKey(KEY.folderOutbox))),
+
+  getNotePatchOutbox: async (): Promise<NotePatchOutboxItem[]> =>
+    normalizeNotePatchOutbox(await safeGet<unknown>(userScopedKey(KEY.notePatchOutbox))),
+
+  mergeNotePatchOutbox(noteId: string, kind: NotePatchOutboxItem['kind'], patch: Record<string, unknown>): Promise<void> {
+    return update<NotePatchOutboxItem[]>(
+      userScopedKey(KEY.notePatchOutbox),
+      (current) => {
+        const items = normalizeNotePatchOutbox(current)
+        const previous = items.find((entry) => entry.noteId === noteId)
+        const rest = items.filter((entry) => entry.noteId !== noteId)
+        if (previous && isCancellingNoteIntent(previous.kind, kind)) return rest
+        return [
+          ...rest,
+          { noteId, kind, patch: { ...previous?.patch, ...patch }, createdAt: previous?.createdAt ?? Date.now() },
+        ]
+      },
+      store,
+    )
+  },
+
+  completeNotePatchOutbox(noteId: string): Promise<void> {
+    return update<NotePatchOutboxItem[]>(
+      userScopedKey(KEY.notePatchOutbox),
+      (current) => normalizeNotePatchOutbox(current).filter((entry) => entry.noteId !== noteId),
+      store,
+    )
+  },
+
+  enqueueFolderOutbox(item: FolderOutboxItem): Promise<void> {
+    return update<FolderOutboxItem[]>(
+      userScopedKey(KEY.folderOutbox),
+      (current) => [
+        ...normalizeFolderOutbox(current).filter((entry) => entry.id !== item.id),
+        item,
+      ],
+      store,
+    )
+  },
+
+  completeFolderOutboxItem(id: string): Promise<void> {
+    return update<FolderOutboxItem[]>(
+      userScopedKey(KEY.folderOutbox),
+      (current) => normalizeFolderOutbox(current).filter((entry) => entry.id !== id),
+      store,
+    )
+  },
 
   enqueueOutbox(item: OutboxItem): Promise<void> {
     return update<OutboxItem[]>(

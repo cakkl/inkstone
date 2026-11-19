@@ -10,7 +10,6 @@ import type {
   BackupTargetPatchInput,
   Backlink,
   Folder,
-  GraphResponse,
   ImportResult,
   ListNotesResponse,
   McpAiSearchStatus,
@@ -34,7 +33,6 @@ import type {
   TotpLoginResult,
   TotpSetupInfo,
   TotpStatus,
-  UpdateCheckResponse,
   UserSettings,
 } from '@shared/types'
 import { publishBroadcast } from './db'
@@ -375,7 +373,6 @@ export const api = {
   },
 
   tags: {
-    list: () => request<{ tags: Tag[] }>('/api/tags'),
     create: (body: { id?: string; name: string; color?: string | null }) =>
       request<Tag>('/api/tags', { method: 'POST', body }),
     patch: (id: string, body: { name?: string; color?: string | null }) =>
@@ -387,18 +384,6 @@ export const api = {
   search: (q: string, limit = 50, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`, { signal }),
   reindex: () => request<{ ok: true; indexed: number }>('/api/search/reindex', { method: 'POST' }),
-  graph: (params: import('@shared/types').GraphQuery = {}, signal?: AbortSignal) =>
-    request<GraphResponse>(`/api/graph${toQuery({
-      mode: params.mode,
-      center: params.center,
-      depth: params.depth,
-      q: params.q,
-      folderId: params.folderId,
-      tag: params.tag,
-      includeOrphans: params.includeOrphans === undefined ? undefined : params.includeOrphans ? 1 : 0,
-      includeUnresolved: params.includeUnresolved === undefined ? undefined : params.includeUnresolved ? 1 : 0,
-      limit: params.limit,
-    })}`, { signal }),
 
   sync: (since: number, options: { after?: string; snapshot?: number } = {}) =>
     request<SyncResponse>(
@@ -470,10 +455,6 @@ export const api = {
       clear: () =>
         request<{ ok: true; removed: number }>('/api/mcp/ai-search/clear', { method: 'POST' }),
     },
-  },
-
-  update: {
-    check: () => request<UpdateCheckResponse>('/api/update', { timeoutMs: 10_000 }),
   },
 
   share: {

@@ -1,9 +1,11 @@
-import { lazy, Suspense, useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Eye, FileText, PanelLeft, PencilLine, UserRound } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { registerAll } from '../../lib/hotkeys';
 import { APP_SHORTCUTS } from '../../lib/shortcuts';
 import { useBreakpoint } from '../../lib/hooks';
+import { useBackLayer, requestBack } from '../../lib/back-stack';
+import { useEdgeSwipeBack, EDGE_SWIPE_EXIT_MS } from '../../lib/edge-swipe';
 import { useSyncEngine } from '../../lib/sync';
 import { Drawer } from '../../components/overlay';
 import { IconButton } from '../../components/primitives';
@@ -12,7 +14,7 @@ import { EditorSkeleton } from '../../components/feedback';
 import { PANEL_WIDTHS, useUi } from '../../store/ui';
 import { createContextualNote, useNotes } from '../../store/notes';
 import { useSession } from '../../store/session';
-import { useUpdate } from '../../store/update';
+import { dismissBootScreen } from '../../lib/boot';
 import { Sidebar } from '../sidebar/Sidebar';
 import { NoteList } from '../list/NoteList';
 import { SearchButton } from './SearchButton';
@@ -28,13 +30,14 @@ const GraphPanel = lazy(() => import('../graph/GraphPanel').then((m) => ({ defau
 const SharePanel = lazy(() => import('../share/SharePanel').then((m) => ({ default: m.SharePanel })));
 const VersionsPanel = lazy(() => import('../workspace/VersionsPanel').then((m) => ({ default: m.VersionsPanel })));
 const Lightbox = lazy(() => import('../preview/Lightbox').then((m) => ({ default: m.Lightbox })));
-const UpdateDialog = lazy(() => import('../update/UpdateDialog').then((m) => ({ default: m.UpdateDialog })));
+performance.mark('inkstone:shell-module');
 export function AppShell() {
     const breakpoint = useBreakpoint();
-    const role = useSession((s) => s.user?.role);
     const userId = useSession((s) => s.user?.id);
+    useLayoutEffect(() => {
+        dismissBootScreen();
+    }, []);
     useEffect(() => scheduleSettingsWarmup(), [userId]);
-    const checkForUpdates = useUpdate((s) => s.check);
     useSyncEngine();
     useGlobalHotkeys();
     const hydrated = useNotes((s) => s.hydrated);
@@ -51,10 +54,6 @@ export function AppShell() {
         useUi.getState().openExplorer();
         void openNote(match[1]!);
     }, [hydrated, loading, openNote]);
-    useEffect(() => {
-        if (role === 'owner')
-            void checkForUpdates();
-    }, [role, checkForUpdates]);
 
     useEffect(() => {
         const ui = useUi.getState();
@@ -135,10 +134,65 @@ function MobileShell() {
     const setPane = useUi((s) => s.setMobilePane);
     const activeNoteId = useUi((s) => s.activeNoteId);
     const notePane = pane === 'editor' || pane === 'preview';
+    const listLayer = useRef<HTMLDivElement>(null);
+    const noteLayer = useRef<HTMLDivElement>(null);
+    const [seenPane, setSeenPane] = useState(pane);
+    const [holdingAccount, setHoldingAccount] = useState(false);
+    if (seenPane !== pane) {
+        setSeenPane(pane);
+        if (notePane && seenPane === 'account')
+            setHoldingAccount(true);
+        else if (!notePane)
+            setHoldingAccount(false);
+    }
     useEffect(() => {
         if (pane === 'nav' || (!activeNoteId && notePane))
             setPane('list');
     }, [activeNoteId, notePane, pane, setPane]);
+    useBackLayer(notePane && Boolean(activeNoteId), 'mobile-note', () => setPane('list'));
+    const settleTimer = useRef(0);
+    useEffect(() => () => window.clearTimeout(settleTimer.current), []);
+    useEffect(() => {
+        for (const element of [listLayer.current, noteLayer.current]) {
+            if (!element) continue;
+            element.style.transition = '';
+            element.style.transform = '';
+        }
+    }, [pane]);
+    const settleListLayer = () => {
+        const element = listLayer.current;
+        if (!element) return;
+        window.clearTimeout(settleTimer.current);
+        settleTimer.current = window.setTimeout(() => {
+            element.style.transition = '';
+            element.style.transform = '';
+            element.style.visibility = '';
+            element.style.opacity = '';
+        }, 60);
+    };
+    const swipe = useEdgeSwipeBack(notePane && Boolean(activeNoteId), requestBack, {
+        onDragChange: (dragging) => {
+            if (!dragging) settleListLayer();
+        },
+        onDrag: (distance, width) => {
+            const element = listLayer.current;
+            if (!element) return;
+            const progress = Math.min(1, distance / Math.max(1, width));
+            window.clearTimeout(settleTimer.current);
+            setHoldingAccount(false);
+            element.style.transition = 'none';
+            element.style.visibility = 'visible';
+            element.style.opacity = '1';
+            element.style.transform = `translateX(${-30 + 30 * progress}%)`;
+        },
+        onDragEnd: (commit) => {
+            const element = listLayer.current;
+            if (!element) return;
+            window.clearTimeout(settleTimer.current);
+            element.style.transition = `transform ${EDGE_SWIPE_EXIT_MS}ms var(--ease-out)`;
+            element.style.transform = commit ? 'translateX(0%)' : 'translateX(-30%)';
+        },
+    });
     const tabs = [
         { id: 'list' as const, icon: <FileText size={19}/>, label: t("common.note") },
         { id: 'editor' as const, icon: <PencilLine size={19}/>, label: t("common.edit") },
@@ -147,14 +201,14 @@ function MobileShell() {
     ];
     return (<div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[var(--bg-base)] pt-[env(safe-area-inset-top)]">
       <div className="relative min-h-0 flex-1">
-        <div aria-hidden={pane !== 'account'} inert={pane !== 'account'} data-active={pane === 'account' || undefined} className="mobile-pane-layer absolute inset-0">
-          {pane === 'account' && <MobileAccount />}
+        <div aria-hidden={pane !== 'account'} inert={pane !== 'account'} data-active={pane === 'account' || undefined} data-held={(holdingAccount && notePane) || undefined} className="mobile-pane-layer absolute inset-0">
+          {(pane === 'account' || holdingAccount) && <MobileAccount />}
         </div>
-        <div aria-hidden={pane !== 'list'} inert={pane !== 'list'} data-active={pane === 'list' || undefined} className="mobile-pane-layer absolute inset-0">
+        <div ref={listLayer} aria-hidden={pane !== 'list'} inert={pane !== 'list'} data-active={pane === 'list' || undefined} data-pushed={(notePane && !holdingAccount) || undefined} className="mobile-pane-layer absolute inset-0">
           <NoteList />
         </div>
-        <div aria-hidden={!notePane} inert={!notePane} data-active={notePane || undefined} data-from="right" className="mobile-pane-layer absolute inset-0">
-          {notePane && activeNoteId && (<Suspense fallback={<WorkspaceFallback />}><Workspace onMobileBack={() => setPane('list')}/></Suspense>) }
+        <div ref={noteLayer} aria-hidden={!notePane} inert={!notePane} data-active={notePane || undefined} data-from="right" className="mobile-pane-layer absolute inset-0" {...(notePane ? swipe : null)}>
+          {activeNoteId && (<Suspense fallback={<WorkspaceFallback />}><Workspace onMobileBack={() => { if (!requestBack()) setPane('list'); }}/></Suspense>) }
         </div>
       </div>
 
@@ -184,8 +238,10 @@ function OverlayHost() {
     const panel = useUi((s) => s.panel);
     const closePanel = useUi((s) => s.closePanel);
     const lightbox = useUi((s) => s.lightbox);
-    const role = useSession((s) => s.user?.role);
-    const updateDialogOpen = useUpdate((s) => s.dialogOpen);
+    const setLightbox = useUi((s) => s.setLightbox);
+    const isMobile = useBreakpoint() === 'mobile';
+    useBackLayer(isMobile && panel !== null, 'overlay-panel', closePanel);
+    useBackLayer(isMobile && Boolean(lightbox), 'overlay-lightbox', () => setLightbox(null));
     return (<>
       {panel === 'settings' && <SettingsPanel key={userId} onClose={closePanel}/>}
       <Suspense fallback={null}>
@@ -196,9 +252,6 @@ function OverlayHost() {
         {panel === 'versions' && <VersionsPanel onClose={closePanel}/>}
         {lightbox && <Lightbox />}
       </Suspense>
-      {role === 'owner' && updateDialogOpen && (<Suspense fallback={null}>
-        <UpdateDialog />
-      </Suspense>)}
     </>);
 }
 
