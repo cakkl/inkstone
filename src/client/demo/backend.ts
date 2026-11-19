@@ -660,7 +660,7 @@ export function createDemoBackend(): DemoBackend {
       full: changed,
       hasMore: false,
       nextKey: null,
-      facetsFull: true,
+      facetsFull: changed,
       settingsChanged: false,
       profileChanged: false,
       notes: changed ? [...state.notes.values()].map(summarize) : [],

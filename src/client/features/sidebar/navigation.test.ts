@@ -134,6 +134,27 @@ describe('explorer and collection navigation', () => {
         expect(useUi.getState().listCollapsed).toBe(true);
     });
 
+    it('toggles a folder from anywhere on its row without closing the drawer', async () => {
+        useUi.setState({ navDrawerOpen: true });
+        await act(() => root.render(createElement(Sidebar)));
+        await click(button(container, folder.name));
+        await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+        expect(useUi.getState()).toMatchObject({ navDrawerOpen: true, view: 'folder', folderId: folder.id, listCollapsed: true });
+        expect(useUi.getState().expandedFolders).toContain(folder.id);
+        expect(container.querySelector('[data-tree-note-id="note"]')).toBeTruthy();
+        await click(button(container, folder.name));
+        expect(useUi.getState().expandedFolders).not.toContain(folder.id);
+        expect(useUi.getState().navDrawerOpen).toBe(true);
+        await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+        expect(container.querySelector('[data-tree-note-id="note"]')).toBeNull();
+        await click(container.querySelector<HTMLElement>('[data-folder-drop-target]')!);
+        await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+        expect(useUi.getState().expandedFolders).toContain(folder.id);
+        expect(container.querySelector('[data-tree-note-id="note"]')).toBeTruthy();
+        await click(container.querySelector<HTMLButtonElement>('[data-tree-note-open]')!);
+        expect(useUi.getState()).toMatchObject({ navDrawerOpen: false, activeNoteId: note.id });
+    });
+
     it('opens global search as a list and returns to folder context when using the explorer', () => {
         useUi.getState().openView('trash');
         useUi.getState().openSearchList();
