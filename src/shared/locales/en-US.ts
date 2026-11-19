@@ -814,6 +814,7 @@ export const EN_US_MESSAGES = {
     "settings.random_avatars": "Suggested avatars",
     "settings.realtime_sync": "Realtime updates",
     "settings.refresh_avatars": "Refresh five",
+    "settings.reconnect_to_load_this_section": "Reconnect to the server to see this section.",
     "settings.rebuild_failed": "Rebuild failed",
     "settings.rebuild_index": "Rebuild index",
     "settings.rebuild_search_index": "Rebuild search index",

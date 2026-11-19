@@ -7,14 +7,17 @@ import { Tooltip, useDialogFocus, useEscape, useLockScroll } from '../../compone
 import { Button, IconButton } from '../../components/primitives';
 import { SettingsLoading } from './SettingsLoading';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
+import { Empty } from '../../components/feedback';
 import { AppearanceSettings } from './AppearanceSettings';
 import { useUi } from '../../store/ui';
+import { useNotes } from '../../store/notes';
 import { useSession } from '../../store/session';
 import { UI_STORAGE_KEY } from '../../lib/runtime';
 import { scheduleSettingsWarmup, settingsLoaders, warmSettingsSection, type SettingsSection } from './sections';
 import { t } from "../../lib/i18n";
 type Section = SettingsSection;
 const AppearancePage = memo(AppearanceSettings);
+const OFFLINE_BLOCKED_SECTIONS: ReadonlySet<Section> = new Set<Section>(['backup', 'mcp', 'shares']);
 export const SECTIONS: {
     id: Section;
     label: () => string;
@@ -34,6 +37,7 @@ export function SettingsPanel({ onClose }: {
     onClose: () => void;
 }) {
     const userId = useSession((s) => s.user?.id);
+    const online = useNotes((s) => s.online);
     const storageKey = `${UI_STORAGE_KEY}:settings-section:${userId ?? 'anonymous'}`;
     const [section, setSection] = useState<Section>(() => {
         try {
@@ -101,7 +105,7 @@ export function SettingsPanel({ onClose }: {
           </header>
 
           {visited.map((page) => (<div key={page} hidden={page !== section} inert={page !== section} aria-hidden={page !== section} className={cn('min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-[calc(16px+env(safe-area-inset-bottom))] md:px-5 md:py-4', page !== section && 'hidden')}>
-            {page === 'appearance' ? <AppearancePage accents={ACCENTS}/> : <SettingsPage section={page}/>}
+            {page === 'appearance' ? <AppearancePage accents={ACCENTS}/> : !online && OFFLINE_BLOCKED_SECTIONS.has(page) ? (<Empty art="select" compact title={t('common.offline_unavailable')} description={t('settings.reconnect_to_load_this_section')}/>) : <SettingsPage section={page}/>}
           </div>))}
         </div>
       </div>

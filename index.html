@@ -61,6 +61,18 @@
     </script>
 
     <style>
+      html,
+      body {
+        margin: 0;
+        background: light-dark(#faf9f7, #1a1817);
+        color-scheme: light dark;
+      }
+      html[data-theme='light'],
+      html[data-theme='light'] body { background: #faf9f7; }
+      html[data-theme='light'][data-background='white'],
+      html[data-theme='light'][data-background='white'] body { background: #fff; }
+      html[data-theme='dark'],
+      html[data-theme='dark'] body { background: #1a1817; }
 
       #boot {
         position: fixed;

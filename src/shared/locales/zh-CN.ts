@@ -815,6 +815,7 @@ export const ZH_CN_MESSAGES = {
     "settings.random_avatars": "推荐头像",
     "settings.realtime_sync": "实时更新",
     "settings.refresh_avatars": "换一组",
+    "settings.reconnect_to_load_this_section": "连接到服务器后才能查看这部分内容。",
     "settings.rebuild_failed": "重建失败",
     "settings.rebuild_index": "重建索引",
     "settings.rebuild_search_index": "重建搜索索引",
