@@ -1,7 +1,7 @@
 import { clear as clearStore, createStore, del, get, getMany, set, setMany, update } from 'idb-keyval'
 import * as idbKeyval from 'idb-keyval'
 import type { UseStore } from 'idb-keyval'
-import type { Folder, Note, NoteSummary, PublicUser, SessionInfo, SiteInfo, Tag } from '@shared/types'
+import type { Folder, Note, NoteSummary, PublicUser, SessionInfo, SiteInfo, SyncLink, Tag } from '@shared/types'
 import { CLIENT_DATABASE_NAME } from './runtime'
 
 const optionalIdbExport = (name: string): unknown => Object.prototype.hasOwnProperty.call(idbKeyval, name)
@@ -16,6 +16,7 @@ const KEY = {
   notes: 'notes',
   folders: 'folders',
   tags: 'tags',
+  links: 'links',
   cursor: 'cursor',
   drafts: 'drafts',
   content: (id: string) => `note:${id}`,
@@ -33,6 +34,7 @@ interface ShellData {
   tags: Tag[]
   cursor: number
   drafts: string[]
+  links: Record<string, SyncLink[]>
 }
 
 /** 跨标签页重放锁的最长等待时间；超时后调用方退回到「只刷新待办计数」。 */
@@ -143,6 +145,23 @@ function normalizeNotePatchOutbox(value: unknown): NotePatchOutboxItem[] {
   })
 }
 
+function normalizeNoteLinks(value: unknown): Record<string, SyncLink[]> {
+  if (!isRecord(value)) return {}
+  const result: Record<string, SyncLink[]> = {}
+  for (const [sourceId, group] of Object.entries(value)) {
+    if (!Array.isArray(group)) continue
+    const links = group.filter((item): item is SyncLink => {
+      if (!isRecord(item)) return false
+      return typeof item.sourceId === 'string' &&
+        typeof item.targetKey === 'string' &&
+        typeof item.targetTitle === 'string' &&
+        (item.targetId === null || typeof item.targetId === 'string')
+    })
+    if (links.length) result[sourceId] = links
+  }
+  return result
+}
+
 async function safeGet<T>(key: string): Promise<T | undefined> {
   try {
     return await get<T>(key, store)
@@ -244,16 +263,18 @@ export const localDb = {
     tags: Tag[]
     cursor: number
     drafts: string[]
+    links: Record<string, SyncLink[]>
   } | null> {
-    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor, KEY.drafts].map((key) => userScopedKey(key))
+    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor, KEY.drafts, KEY.links].map((key) => userScopedKey(key))
     try {
       const values = await getMany(shellKeys, store)
-      const [notes, folders, tags, cursor, drafts] = values as [
+      const [notes, folders, tags, cursor, drafts, links] = values as [
         NoteSummary[] | undefined,
         Folder[] | undefined,
         Tag[] | undefined,
         number | undefined,
         string[] | undefined,
+        unknown,
       ]
       if (
         !Array.isArray(notes) || !notes.every(isNoteSummary) ||
@@ -269,6 +290,7 @@ export const localDb = {
         tags,
         cursor,
         drafts: Array.isArray(drafts) ? drafts.filter((id): id is string => typeof id === 'string') : [],
+        links: normalizeNoteLinks(links),
       }
     } catch {
       return null
@@ -284,6 +306,7 @@ export const localDb = {
           [userScopedKey(KEY.tags, userId), data.tags],
           [userScopedKey(KEY.cursor, userId), data.cursor],
           [userScopedKey(KEY.drafts, userId), data.drafts],
+          [userScopedKey(KEY.links, userId), data.links],
         ],
         store,
       )

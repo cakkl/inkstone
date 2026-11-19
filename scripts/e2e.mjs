@@ -396,14 +396,10 @@ console.log('[search filters and stable backlinks]')
 
   const restoredFallback = await owner.req('POST', `/api/notes/${fallback.data?.id}/restore`)
   const restoredBacklinks = await owner.req('GET', `/api/notes/${fallback.data?.id}/backlinks`)
-  const graph = await owner.req('GET', '/api/graph')
   check(
     'restoring the older duplicate deterministically takes its links back',
     restoredFallback.status === 200 &&
-      (restoredBacklinks.data?.backlinks ?? []).some((item) => item.id === source.data?.id) &&
-      (graph.data?.edges ?? []).some(
-        (edge) => edge.source === source.data?.id && edge.target === fallback.data?.id,
-      ),
+      (restoredBacklinks.data?.backlinks ?? []).some((item) => item.id === source.data?.id),
   )
 
   const spacedTarget = await owner.req('POST', '/api/notes', {

@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { LIMITS } from '@shared/constants'
-import type { SyncDeletion, SyncResponse } from '@shared/types'
+import type { SyncDeletion, SyncLink, SyncResponse } from '@shared/types'
 import type { AppBindings } from '../env'
 import { NOTE_COLUMNS, toFolder, toNoteSummary, toTag, type FolderRow, type NoteRow, type TagRow } from '../db/rows'
 import { ApiError } from '../lib/errors'
@@ -180,6 +180,7 @@ syncRoutes.get('/', requireAuth, async (c) => {
     notes: notes.map(toNoteSummary),
     folders: folders.map(toFolder),
     tags: tags.map(toTag),
+    links: await loadLinks(c.env.DB, userId, notes.map((note) => note.id)),
     deletions,
     serverTime: Date.now(),
   }
@@ -257,6 +258,7 @@ async function fullSnapshot(
     notes: pageNotes.map(toNoteSummary),
     folders: folders.results.map(toFolder),
     tags: tags.results.map(toTag),
+    links: await loadLinks(db, userId, pageNotes.map((note) => note.id)),
     deletions: [],
     serverTime: Date.now(),
   }
@@ -264,6 +266,25 @@ async function fullSnapshot(
 
 function placeholders(count: number, start: number): string {
   return Array.from({ length: count }, (_, i) => `?${start + i}`).join(', ')
+}
+
+async function loadLinks(db: D1Database, userId: string, sourceIds: string[]): Promise<SyncLink[]> {
+  if (!sourceIds.length) return []
+  const rows = await loadInChunks(sourceIds, (ids) =>
+    db.prepare(
+      `SELECT source_note_id, target_key, target_title, target_note_id FROM links
+        WHERE user_id = ?1 AND source_note_id IN (${placeholders(ids.length, 2)})
+        ORDER BY source_note_id ASC, target_key ASC`,
+    )
+      .bind(userId, ...ids)
+      .all<{ source_note_id: string; target_key: string; target_title: string; target_note_id: string | null }>(),
+  )
+  return rows.map((row) => ({
+    sourceId: row.source_note_id,
+    targetKey: row.target_key,
+    targetTitle: row.target_title,
+    targetId: row.target_note_id,
+  }))
 }
 
 async function loadInChunks<T>(

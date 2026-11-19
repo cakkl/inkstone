@@ -29,6 +29,19 @@ export function duplicateNoteTitle(
   return truncateText(base, Math.max(0, maxLength - normalizedSuffix.length)) + normalizedSuffix
 }
 
+export function linkContext(content: string, title: string): string {
+  const needle = `[[${title}`
+  const idx = content.toLowerCase().indexOf(needle.toLowerCase())
+  if (idx < 0) return truncateText(content, 120).replace(/\s+/g, ' ').trim()
+  const start = Math.max(0, idx - 60)
+  const end = Math.min(content.length, idx + needle.length + 90)
+  return (
+    (start > 0 ? '…' : '') +
+    sliceText(content, start, end).replace(/\s+/g, ' ').trim() +
+    (end < content.length ? '…' : '')
+  )
+}
+
 const utf8Encoder = new TextEncoder()
 
 export function utf8ByteLength(value: string): number {

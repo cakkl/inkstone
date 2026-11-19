@@ -4,10 +4,11 @@ import { useMemo } from 'react';
 import { countText, deriveExcerpt, extractTags, normalizeLinkKey, sortTagNames } from '@shared/markdown-utils';
 import { duplicateNoteTitle } from '@shared/text-utils';
 import { LIMITS } from '@shared/constants';
-import type { AppLocale, Folder, Note, NoteSummary, SortKey, SortOrder, SyncResponse, Tag, ViewKind, } from '@shared/types';
+import type { AppLocale, Folder, Note, NoteSummary, SortKey, SortOrder, SyncDeletion, SyncLink, SyncResponse, Tag, ViewKind, } from '@shared/types';
 import { api, ApiError, CLIENT_ID } from '../lib/api';
 import { localDb, publishBroadcast, type BroadcastPayload, type FolderOutboxItem, type NotePatchOutboxItem, type OutboxItem } from '../lib/db';
 import { folderDescendantIds } from '../lib/folders';
+import { buildTitleIndex, linksForContent } from '../lib/note-links';
 import { useSession } from './session';
 import { useUi, type WorkspacePane } from './ui';
 import { getLocale, t, useLocale } from "../lib/i18n";
@@ -18,6 +19,7 @@ interface NotesState {
     noteLoadErrors: Record<string, string>;
     folders: Folder[];
     tags: Tag[];
+    links: Record<string, SyncLink[]>;
     cursor: number;
     hydrated: boolean;
     loading: boolean;
@@ -153,6 +155,7 @@ export const useNotes = create<NotesState>((set, get) => ({
     noteLoadErrors: {},
     folders: [],
     tags: [],
+    links: {},
     cursor: 0,
     hydrated: false,
     loading: false,
@@ -182,6 +185,7 @@ export const useNotes = create<NotesState>((set, get) => ({
                         })),
                         folders: cached.folders.map(normalizeFolder),
                         tags: cached.tags,
+                        links: cached.links,
                         cursor: cached.cursor,
                         drafts: new Set(cached.drafts),
                         hydrated: true,
@@ -249,6 +253,7 @@ export const useNotes = create<NotesState>((set, get) => ({
             }
             finally {
                 set({ loading: false, hydrated: true });
+                scheduleContentPrefetch(get);
             }
         };
         bootstrapPromise = run().catch((err) => {
@@ -361,6 +366,7 @@ export const useNotes = create<NotesState>((set, get) => ({
         const previousNoteIds = payload.full ? Object.keys(get().notes) : [];
         set((state) => {
             const notes = applyNotePatchIntents(reconcileNotes(state.notes, payload.notes, payload.deletions, payload.full, state.drafts));
+            const links = mergeNoteLinks(state.links, payload.links, payload.notes, payload.deletions);
             const replaceFacets = payload.full || payload.facetsFull;
             const remoteFolders = replaceFacets
                 ? reconcileList(state.folders, payload.folders, folderEqual)
@@ -370,6 +376,7 @@ export const useNotes = create<NotesState>((set, get) => ({
                 ? reconcileList(state.tags, payload.tags, tagEqual)
                 : mergeById(state.tags, payload.tags, payload.deletions, 'tag', tagEqual);
             if (notes === state.notes &&
+                links === state.links &&
                 folders === state.folders &&
                 tags === state.tags &&
                 payload.cursor === state.cursor) {
@@ -385,8 +392,9 @@ export const useNotes = create<NotesState>((set, get) => ({
                 tags,
                 cursor: payload.cursor,
                 drafts: [...state.drafts],
+                links,
             });
-            return { notes, folders, tags, cursor: payload.cursor };
+            return { notes, links, folders, tags, cursor: payload.cursor };
         });
         reconcileFolderUi(get().folders);
         for (const remote of payload.notes) {
@@ -1420,6 +1428,8 @@ function stageNoteTextWrite(id: string, content: string, title: string | undefin
         }
         if (nextTitle.trim() || content.trim())
             void materializeDraft(id, set, get);
+        if (contentChanged || titleChanged)
+            scheduleLinkRefresh(id, titleChanged ? summary.title : undefined);
         return;
     }
     const previousDirty = dirty.get(id);
@@ -1457,6 +1467,8 @@ function stageNoteTextWrite(id: string, content: string, title: string | undefin
     }));
     if (contentChanged)
         scheduleSummaryDerivation(id, content, updatedAt, set, get);
+    if (contentChanged || titleChanged)
+        scheduleLinkRefresh(id, titleChanged ? summary.title : undefined);
     if (titleChanged)
         scheduleShellSave(get);
     void localDb.setContent(id, {
@@ -2011,6 +2023,7 @@ function scheduleShellSave(get: () => NotesState): void {
         tags: state.tags,
         cursor: state.cursor,
         drafts: [...state.drafts],
+        links: state.links,
     });
 }
 type DraftPatch = Partial<Pick<NoteSummary, 'isPinned' | 'isStarred' | 'isArchived'>> & { folderId?: string | null };
@@ -2600,6 +2613,104 @@ function refreshPendingCount(): void {
         .then((pendingCount) => useNotes.setState({ pendingCount }))
         .catch(() => { });
 }
+const LINK_REFRESH_DELAY_MS = 300;
+const linkRefreshTimers = new Map<string, number>();
+const linkRefreshPreviousTitles = new Map<string, string | undefined>();
+function scheduleLinkRefresh(id: string, previousTitle?: string): void {
+    if (!linkRefreshTimers.has(id))
+        linkRefreshPreviousTitles.set(id, previousTitle);
+    const timer = linkRefreshTimers.get(id);
+    if (timer !== undefined)
+        window.clearTimeout(timer);
+    linkRefreshTimers.set(id, window.setTimeout(() => {
+        linkRefreshTimers.delete(id);
+        const previous = linkRefreshPreviousTitles.get(id);
+        linkRefreshPreviousTitles.delete(id);
+        refreshNoteLinks(id, previous);
+    }, LINK_REFRESH_DELAY_MS));
+}
+function refreshNoteLinks(id: string, previousTitle?: string): void {
+    const state = useNotes.getState();
+    const note = state.notes[id];
+    const content = state.contents[id];
+    if (!note || content === undefined)
+        return;
+    const index = buildTitleIndex(state.notes);
+    const group = linksForContent(id, content, index);
+    const currentKey = normalizeLinkKey(note.title);
+    const previousKey = previousTitle === undefined ? null : normalizeLinkKey(previousTitle);
+    useNotes.setState((current) => {
+        const links = { ...current.links };
+        if (group.length)
+            links[id] = group;
+        else
+            delete links[id];
+        if (previousKey !== null) {
+            for (const [sourceId, entries] of Object.entries(links)) {
+                if (sourceId === id)
+                    continue;
+                let changed = false;
+                const next = entries.map((link) => {
+                    if (link.targetKey !== currentKey && link.targetKey !== previousKey)
+                        return link;
+                    const targetId = index.get(link.targetKey) ?? null;
+                    if (targetId === link.targetId)
+                        return link;
+                    changed = true;
+                    return { ...link, targetId };
+                });
+                if (changed)
+                    links[sourceId] = next;
+            }
+        }
+        return { links };
+    });
+    scheduleShellSave(() => useNotes.getState());
+}
+const PREFETCH_NOTE_LIMIT = 30;
+const PREFETCH_CONTENT_BUDGET = 8 * 1024 * 1024;
+const PREFETCH_DELAY_MS = 4_000;
+let prefetchPromise: Promise<void> | null = null;
+function scheduleContentPrefetch(get: () => NotesState): void {
+    if (prefetchPromise || !get().online)
+        return;
+    window.setTimeout(() => { void prefetchRecentContents(get); }, PREFETCH_DELAY_MS);
+}
+export function prefetchRecentContents(get: () => NotesState): Promise<void> {
+    if (prefetchPromise)
+        return prefetchPromise;
+    const run = async () => {
+        let budget = PREFETCH_CONTENT_BUDGET;
+        const candidates = Object.values(get().notes)
+            .filter((note) => !note.deletedAt)
+            .sort((left, right) => right.updatedAt - left.updatedAt)
+            .slice(0, PREFETCH_NOTE_LIMIT);
+        for (const note of candidates) {
+            if (budget <= 0 || !get().online)
+                return;
+            if (hasOwnContent(get().contents, note.id))
+                continue;
+            if (await localDb.getContent(note.id).catch(() => undefined))
+                continue;
+            try {
+                const full = await api.notes.get(note.id);
+                if (typeof full.content !== 'string')
+                    continue;
+                budget -= full.content.length;
+                await localDb.setContent(note.id, {
+                    content: full.content,
+                    rev: full.rev,
+                    updatedAt: full.updatedAt,
+                });
+            }
+            catch {
+                return;
+            }
+        }
+    };
+    prefetchPromise = run().catch(() => { }).finally(() => { prefetchPromise = null; });
+    return prefetchPromise;
+}
 export function acknowledgeOutboxBaseAdvanced(
     result: Extract<BroadcastPayload, { type: 'outbox-base-advanced' }>,
 ): Promise<void> {
@@ -2693,6 +2804,51 @@ export function acknowledgeOutboxResult(result: OutboxResult): void {
     });
     if (result.copyId)
         showOfflineRecoveryToast(result.copyId, result.recoveryReason !== 'deleted');
+}
+function mergeNoteLinks(
+    previous: Record<string, SyncLink[]>,
+    incoming: SyncLink[] | undefined,
+    notes: NoteSummary[],
+    deletions: SyncDeletion[],
+): Record<string, SyncLink[]> {
+    if (!incoming)
+        return previous;
+    const grouped = new Map<string, SyncLink[]>();
+    for (const link of incoming) {
+        const group = grouped.get(link.sourceId);
+        if (group)
+            group.push(link);
+        else
+            grouped.set(link.sourceId, [link]);
+    }
+    const next = { ...previous };
+    let changed = false;
+    for (const note of notes) {
+        if (dirty.has(note.id))
+            continue;
+        const group = grouped.get(note.id) ?? [];
+        const before = previous[note.id];
+        if (!group.length) {
+            if (before) {
+                delete next[note.id];
+                changed = true;
+            }
+            continue;
+        }
+        if (before && before.length === group.length &&
+            before.every((link, index) =>
+                link.targetKey === group[index]!.targetKey && link.targetId === group[index]!.targetId))
+            continue;
+        next[note.id] = group;
+        changed = true;
+    }
+    for (const deletion of deletions) {
+        if (deletion.entity !== 'note' || !next[deletion.id])
+            continue;
+        delete next[deletion.id];
+        changed = true;
+    }
+    return changed ? next : previous;
 }
 function reconcileNotes(current: Record<string, NoteSummary>, incoming: NoteSummary[], deletions: {
     entity: string;

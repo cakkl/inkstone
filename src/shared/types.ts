@@ -340,6 +340,13 @@ export interface SyncDeletion {
   id: string
 }
 
+export interface SyncLink {
+  sourceId: string
+  targetKey: string
+  targetTitle: string
+  targetId: string | null
+}
+
 export interface SyncResponse {
   cursor: number
   full: boolean
@@ -356,6 +363,7 @@ export interface SyncResponse {
   notes: NoteSummary[]
   folders: Folder[]
   tags: Tag[]
+  links?: SyncLink[]
   deletions: SyncDeletion[]
   serverTime: number
 }

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../lib/db', () => ({
   localDb: {
     scheduleShellSave: vi.fn(), setContent: vi.fn(async () => {}), dropContent: vi.fn(async () => {}),
+    getContent: vi.fn(async () => undefined),
     getOutbox: async () => mocks.queue,
     getFolderOutbox: async () => mocks.folders,
     enqueueFolderOutbox: async (item: any) => {
@@ -50,6 +51,7 @@ vi.mock('../lib/api', async () => {
   return { ...actual, api: { ...actual.api, sync: mocks.sync, notes: { get: mocks.get, patch: mocks.patch, create: mocks.create, remove: mocks.remove, restore: mocks.restore }, folders: { create: mocks.folderCreate, patch: mocks.folderPatch } } }
 })
 import { useNotes } from './notes'
+import { prefetchRecentContents } from './notes'
 import { useUi } from './ui'
 import { ApiError } from '../lib/api'
 
@@ -76,7 +78,7 @@ beforeEach(() => {
   mocks.sync.mockRejectedValue(new Error('sync is unavailable in this test'))
   mocks.get.mockResolvedValue({ ...note })
   useNotes.setState({ notes: { [note.id]: note }, contents: { [note.id]: note.content },
-    folders: [], tags: [], cursor: 1, pendingCount: 0, online: true, drafts: new Set<string>() })
+    folders: [], tags: [], links: {}, cursor: 1, pendingCount: 0, online: true, drafts: new Set<string>() })
   useUi.setState({ activeNoteId: null, workspacePrimaryNoteId: null, workspaceSecondaryNoteId: null })
 })
 afterEach(() => vi.useRealTimers())
@@ -329,4 +331,77 @@ it('retries a queued folder creation once after a conflict', async () => {
   expect(mocks.folderCreate).toHaveBeenCalledTimes(2)
   expect(mocks.folders).toHaveLength(0)
   expect(useNotes.getState().folders.some((folder) => folder.id === id)).toBe(true)
+})
+
+it('keeps the synced link index so backlinks survive offline', async () => {
+  const target = '01m1r8923zajxnw9y0dhs6sy9k'
+  useNotes.getState().applySync({
+    ...sync(note),
+    links: [{ sourceId: note.id, targetKey: 'target note', targetTitle: 'Target note', targetId: target }],
+  })
+  expect(useNotes.getState().links[note.id]).toHaveLength(1)
+
+  useNotes.getState().applySync({ ...sync(note), notes: sync(note).notes, links: [] })
+  expect(useNotes.getState().links[note.id]).toBeUndefined()
+})
+
+it('prefetches recent note bodies only while online', async () => {
+  const other = { ...note, id: '01m1r8923zajxnw9y0dhs6sy9m', updatedAt: 20 }
+  useNotes.setState({ notes: { [note.id]: note, [other.id]: other }, contents: {}, online: false })
+  await prefetchRecentContents(() => useNotes.getState())
+  expect(mocks.get).not.toHaveBeenCalled()
+
+  mocks.get.mockImplementation(async (id: string) => ({ ...note, id, content: 'cached body', rev: 2 }))
+  useNotes.setState({ online: true })
+  await prefetchRecentContents(() => useNotes.getState())
+  expect(mocks.get).toHaveBeenCalledWith(other.id)
+})
+
+it('rebuilds the local link index as soon as a note gains a wiki link', async () => {
+  const target = { ...note, id: '01m1r8923zajxnw9y0dhs6sy9n', title: 'Target note', createdAt: 5 }
+  useNotes.setState({
+    notes: { [note.id]: note, [target.id]: target },
+    contents: { [note.id]: 'old', [target.id]: 'body' },
+  })
+
+  useNotes.getState().editContent(note.id, 'see [[Target note]]')
+  await vi.advanceTimersByTimeAsync(400)
+
+  expect(useNotes.getState().links[note.id]?.[0]).toMatchObject({
+    sourceId: note.id,
+    targetTitle: 'Target note',
+    targetId: target.id,
+  })
+})
+
+it('re-resolves inbound links when the target title changes', async () => {
+  const target = { ...note, id: '01m1r8923zajxnw9y0dhs6sy9p', title: 'Old title', createdAt: 5 }
+  const source = { ...note, id: '01m1r8923zajxnw9y0dhs6sy9q', title: 'Source' }
+  useNotes.setState({
+    notes: { [target.id]: target, [source.id]: source },
+    contents: { [target.id]: 'body', [source.id]: 'see [[Old title]]' },
+    links: {
+      [source.id]: [{ sourceId: source.id, targetKey: 'old title', targetTitle: 'Old title', targetId: target.id }],
+    },
+  })
+
+  useNotes.getState().editTitle(target.id, 'New title')
+  await vi.advanceTimersByTimeAsync(400)
+
+  expect(useNotes.getState().links[source.id]?.[0]?.targetId).toBeNull()
+})
+
+it('keeps locally resolved links while the server still reports the old copy', async () => {
+  const target = { ...note, id: '01m1r8923zajxnw9y0dhs6sy9r', title: 'Target note', createdAt: 5 }
+  useNotes.setState({
+    notes: { [note.id]: note, [target.id]: target },
+    contents: { [note.id]: 'old', [target.id]: 'body' },
+  })
+
+  useNotes.getState().editContent(note.id, 'see [[Target note]]')
+  await vi.advanceTimersByTimeAsync(400)
+  expect(useNotes.getState().links[note.id]).toHaveLength(1)
+
+  useNotes.getState().applySync({ ...sync(note), notes: sync(note).notes, links: [] })
+  expect(useNotes.getState().links[note.id]).toHaveLength(1)
 })

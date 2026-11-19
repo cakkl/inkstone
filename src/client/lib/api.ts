@@ -10,7 +10,6 @@ import type {
   BackupTargetPatchInput,
   Backlink,
   Folder,
-  GraphResponse,
   ImportResult,
   ListNotesResponse,
   McpAiSearchStatus,
@@ -386,18 +385,6 @@ export const api = {
   search: (q: string, limit = 50, signal?: AbortSignal) =>
     request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`, { signal }),
   reindex: () => request<{ ok: true; indexed: number }>('/api/search/reindex', { method: 'POST' }),
-  graph: (params: import('@shared/types').GraphQuery = {}, signal?: AbortSignal) =>
-    request<GraphResponse>(`/api/graph${toQuery({
-      mode: params.mode,
-      center: params.center,
-      depth: params.depth,
-      q: params.q,
-      folderId: params.folderId,
-      tag: params.tag,
-      includeOrphans: params.includeOrphans === undefined ? undefined : params.includeOrphans ? 1 : 0,
-      includeUnresolved: params.includeUnresolved === undefined ? undefined : params.includeUnresolved ? 1 : 0,
-      limit: params.limit,
-    })}`, { signal }),
 
   sync: (since: number, options: { after?: string; snapshot?: number } = {}) =>
     request<SyncResponse>(
