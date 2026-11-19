@@ -20,6 +20,8 @@ const KEY = {
   drafts: 'drafts',
   content: (id: string) => `note:${id}`,
   outbox: 'outbox',
+  folderOutbox: 'folder-outbox',
+  notePatchOutbox: 'note-patch-outbox',
   outboxReplayLease: 'outboxReplayLease',
   userId: 'userId',
   session: 'session',
@@ -55,6 +57,31 @@ export interface OutboxItem {
   lastError?: string
 }
 
+export interface FolderOutboxItem {
+  id: string
+  kind: 'create' | 'patch'
+  folderId: string
+  createdAt: number
+  name?: string
+  parentId?: string | null
+  icon?: string | null
+  color?: string | null
+  patch?: {
+    name?: string
+    parentId?: string | null
+    beforeId?: string | null
+    icon?: string | null
+    color?: string | null
+  }
+}
+
+export interface NotePatchOutboxItem {
+  noteId: string
+  kind: 'patch' | 'delete' | 'restore'
+  patch: Record<string, unknown>
+  createdAt: number
+}
+
 export interface CachedNoteContent {
   content: string
   rev: number
@@ -78,6 +105,39 @@ function normalizeOutbox(value: unknown): OutboxItem[] {
       !Array.isArray(candidate.payload) &&
       typeof candidate.attempts === 'number' &&
       Number.isInteger(candidate.attempts) &&
+      typeof candidate.createdAt === 'number' &&
+      Number.isFinite(candidate.createdAt)
+  })
+}
+
+function normalizeFolderOutbox(value: unknown): FolderOutboxItem[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is FolderOutboxItem => {
+    if (!item || typeof item !== 'object') return false
+    const candidate = item as Partial<FolderOutboxItem>
+    return typeof candidate.id === 'string' &&
+      (candidate.kind === 'create' || candidate.kind === 'patch') &&
+      typeof candidate.folderId === 'string' &&
+      typeof candidate.createdAt === 'number' &&
+      Number.isFinite(candidate.createdAt)
+  })
+}
+
+function isCancellingNoteIntent(previous: NotePatchOutboxItem['kind'], next: NotePatchOutboxItem['kind']): boolean {
+  return (previous === 'delete' && next === 'restore') || (previous === 'restore' && next === 'delete')
+}
+
+function normalizeNotePatchOutbox(value: unknown): NotePatchOutboxItem[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is NotePatchOutboxItem => {
+    if (!item || typeof item !== 'object') return false
+    const candidate = item as Partial<NotePatchOutboxItem>
+    const kind = candidate.kind ?? 'patch'
+    return typeof candidate.noteId === 'string' &&
+      (kind === 'patch' || kind === 'delete' || kind === 'restore') &&
+      Boolean(candidate.patch) &&
+      typeof candidate.patch === 'object' &&
+      !Array.isArray(candidate.patch) &&
       typeof candidate.createdAt === 'number' &&
       Number.isFinite(candidate.createdAt)
   })
@@ -267,6 +327,56 @@ export const localDb = {
   dropContent: (id: string) => del(userScopedKey(KEY.content(id)), store).catch(() => {}),
 
   getOutbox: async (): Promise<OutboxItem[]> => normalizeOutbox(await safeGet<unknown>(userScopedKey(KEY.outbox))),
+
+  getFolderOutbox: async (): Promise<FolderOutboxItem[]> =>
+    normalizeFolderOutbox(await safeGet<unknown>(userScopedKey(KEY.folderOutbox))),
+
+  getNotePatchOutbox: async (): Promise<NotePatchOutboxItem[]> =>
+    normalizeNotePatchOutbox(await safeGet<unknown>(userScopedKey(KEY.notePatchOutbox))),
+
+  mergeNotePatchOutbox(noteId: string, kind: NotePatchOutboxItem['kind'], patch: Record<string, unknown>): Promise<void> {
+    return update<NotePatchOutboxItem[]>(
+      userScopedKey(KEY.notePatchOutbox),
+      (current) => {
+        const items = normalizeNotePatchOutbox(current)
+        const previous = items.find((entry) => entry.noteId === noteId)
+        const rest = items.filter((entry) => entry.noteId !== noteId)
+        if (previous && isCancellingNoteIntent(previous.kind, kind)) return rest
+        return [
+          ...rest,
+          { noteId, kind, patch: { ...previous?.patch, ...patch }, createdAt: previous?.createdAt ?? Date.now() },
+        ]
+      },
+      store,
+    )
+  },
+
+  completeNotePatchOutbox(noteId: string): Promise<void> {
+    return update<NotePatchOutboxItem[]>(
+      userScopedKey(KEY.notePatchOutbox),
+      (current) => normalizeNotePatchOutbox(current).filter((entry) => entry.noteId !== noteId),
+      store,
+    )
+  },
+
+  enqueueFolderOutbox(item: FolderOutboxItem): Promise<void> {
+    return update<FolderOutboxItem[]>(
+      userScopedKey(KEY.folderOutbox),
+      (current) => [
+        ...normalizeFolderOutbox(current).filter((entry) => entry.id !== item.id),
+        item,
+      ],
+      store,
+    )
+  },
+
+  completeFolderOutboxItem(id: string): Promise<void> {
+    return update<FolderOutboxItem[]>(
+      userScopedKey(KEY.folderOutbox),
+      (current) => normalizeFolderOutbox(current).filter((entry) => entry.id !== id),
+      store,
+    )
+  },
 
   enqueueOutbox(item: OutboxItem): Promise<void> {
     return update<OutboxItem[]>(

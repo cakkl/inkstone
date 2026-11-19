@@ -140,8 +140,10 @@ function serviceWorkerSource(buildId: string, coreUrls: string[], allUrls: strin
 	const CURRENT_MANIFEST_URL = MANIFEST_META_PREFIX + BUILD_ID
 	const NETWORK_ONLY_EXACT_PATHS = ['/authorize', '/mcp']
 	const NETWORK_ONLY_PATH_PREFIXES = ['/api/', '/authorize/', '/mcp/', '/oauth/', '/.well-known/']
-	let warmPromise = null
-
+	const FILES_CACHE = 'inkstone-files-v1'
+	const FILE_PATH_RE = new RegExp(${JSON.stringify('^/api/files/[0-9a-hjkmnp-tv-z]{26}$')})
+	const MAX_CACHED_FILES = 240
+	const MAX_CACHED_FILE_BYTES = 8 * 1024 * 1024
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const previousShells = (await caches.keys()).filter((key) =>
@@ -180,6 +182,10 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return
 
   const url = new URL(request.url)
+  if (url.origin === self.location.origin && FILE_PATH_RE.test(url.pathname)) {
+    event.respondWith(cacheFirstAttachment(request, url.pathname))
+    return
+  }
 	  if (
 	    url.origin !== self.location.origin ||
 	    NETWORK_ONLY_EXACT_PATHS.includes(url.pathname) ||
@@ -212,13 +218,38 @@ self.addEventListener('fetch', (event) => {
 async function cacheCoreResources() {
   const shell = await caches.open(SHELL_CACHE)
   await forEachConcurrent(CORE_URLS, 4, async (url) => {
-    if (await shell.match(url)) return
-    let response = null
-    if (isImmutableAsset(url)) response = await caches.match(url, { ignoreSearch: true })
-    if (!response) response = await fetchRequired(url)
-    await shell.put(url, response.clone())
+    try {
+      if (await shell.match(url)) return
+      let response = null
+      if (isImmutableAsset(url)) response = await caches.match(url, { ignoreSearch: true })
+      if (!response) response = await fetchRequired(url)
+      await shell.put(url, response.clone())
+    } catch {
+    }
   })
   await shell.put(CACHE_META_URL, new Response(String(Date.now())))
+}
+
+async function cacheFirstAttachment(request, pathname) {
+  const cache = await caches.open(FILES_CACHE)
+  const cached = await cache.match(pathname)
+  if (cached) return cached
+  const response = await fetch(request)
+  if (response.status === 200) {
+    const length = Number(response.headers.get('content-length'))
+    if (!Number.isFinite(length) || length <= MAX_CACHED_FILE_BYTES) {
+      await cache.put(pathname, response.clone())
+      await pruneFileCache(cache)
+    }
+  }
+  return response
+}
+
+async function pruneFileCache(cache) {
+  const keys = await cache.keys()
+  const excess = keys.length - MAX_CACHED_FILES
+  if (excess <= 0) return
+  for (let index = 0; index < excess; index++) await cache.delete(keys[index])
 }
 
 function warmOfflineCache(notifyWhenComplete) {
@@ -320,7 +351,7 @@ async function pruneAssetCache(cache) {
 }
 
 async function fetchRequired(url) {
-  const response = await fetch(url)
+  const response = await fetch(url, { signal: AbortSignal.timeout(8000) })
   if (!response.ok) throw new Error('Failed to cache ' + url + ': HTTP ' + response.status)
   return response
 }

@@ -45,6 +45,18 @@ let sessionCacheTask: Promise<void> = Promise.resolve()
 let sessionCacheEpoch = 0
 let loadTask: Promise<void> | null = null
 
+async function clearAttachmentCache(): Promise<void> {
+  if (typeof caches === 'undefined')
+    return
+  try {
+    const keys = await caches.keys()
+    await Promise.all(keys
+      .filter((key) => key.startsWith('inkstone-files-'))
+      .map((key) => caches.delete(key)))
+  } catch {
+  }
+}
+
 export const useSession = create<SessionState>((set, get) => ({
   status: 'loading',
   user: null,
@@ -228,6 +240,7 @@ export const useSession = create<SessionState>((set, get) => ({
       resetSettingsPersistence(null)
       await pendingSessionCache.catch(() => {})
       await localDb.clear()
+      await clearAttachmentCache()
       set({ status: 'anonymous', user: null, settings: DEFAULT_SETTINGS })
       location.reload()
     })()

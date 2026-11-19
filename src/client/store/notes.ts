@@ -6,7 +6,7 @@ import { duplicateNoteTitle } from '@shared/text-utils';
 import { LIMITS } from '@shared/constants';
 import type { AppLocale, Folder, Note, NoteSummary, SortKey, SortOrder, SyncResponse, Tag, ViewKind, } from '@shared/types';
 import { api, ApiError, CLIENT_ID } from '../lib/api';
-import { localDb, publishBroadcast, type BroadcastPayload, type OutboxItem } from '../lib/db';
+import { localDb, publishBroadcast, type BroadcastPayload, type FolderOutboxItem, type NotePatchOutboxItem, type OutboxItem } from '../lib/db';
 import { folderDescendantIds } from '../lib/folders';
 import { useSession } from './session';
 import { useUi, type WorkspacePane } from './ui';
@@ -199,6 +199,10 @@ export const useNotes = create<NotesState>((set, get) => ({
                 }
 
                 await replayOutbox(get, set);
+                await replayFolderOutbox(set, get);
+                for (const item of await localDb.getNotePatchOutbox().catch(() => []))
+                    rememberNotePatchIntent(item.noteId, item.kind, item.patch);
+                await replayNotePatchOutbox(set, get);
                 if (pullError)
                     throw pullError;
 
@@ -356,7 +360,7 @@ export const useNotes = create<NotesState>((set, get) => ({
         }
         const previousNoteIds = payload.full ? Object.keys(get().notes) : [];
         set((state) => {
-            const notes = reconcileNotes(state.notes, payload.notes, payload.deletions, payload.full, state.drafts);
+            const notes = applyNotePatchIntents(reconcileNotes(state.notes, payload.notes, payload.deletions, payload.full, state.drafts));
             const replaceFacets = payload.full || payload.facetsFull;
             const remoteFolders = replaceFacets
                 ? reconcileList(state.folders, payload.folders, folderEqual)
@@ -551,6 +555,7 @@ export const useNotes = create<NotesState>((set, get) => ({
                         for (const noteId of dirty.keys())
                             pendingIds.add(noteId);
                         set({ pendingCount: pendingIds.size });
+                        refreshPendingCount();
                     }
                 }
                 set((s) => ({
@@ -638,9 +643,10 @@ export const useNotes = create<NotesState>((set, get) => ({
         if (dirty.size)
             set((state) => ({ saveStatus: state.online ? 'saving' : 'offline' }));
         await replayOutbox(get, set);
+        await replayFolderOutbox(set, get);
+        await replayNotePatchOutbox(set, get);
         commitAllPendingSummaryDerivations();
-        const remaining = await localDb.getOutbox();
-        const pendingCount = pendingNoteCount(remaining);
+        const pendingCount = await computePendingCount();
         set((state) => ({
             saveStatus: pendingCount ? (state.online ? 'dirty' : 'offline') : 'synced',
             pendingCount,
@@ -712,6 +718,13 @@ export const useNotes = create<NotesState>((set, get) => ({
         const mutation = beginNoteMutation(id, compactOptimisticPatch(patch), set, get);
         if (!mutation)
             return;
+        const queuedPatch = { ...patch } as Record<string, unknown>;
+        if (!get().online) {
+            finishNoteMutation(id, mutation);
+            rememberNotePatchIntent(id, 'patch', queuedPatch);
+            await localDb.mergeNotePatchOutbox(id, 'patch', queuedPatch).catch(() => { });
+            return;
+        }
         await enqueueNoteWrite(id, async () => {
             const summary = get().notes[id];
             if (!summary) {
@@ -728,6 +741,13 @@ export const useNotes = create<NotesState>((set, get) => ({
                     return;
                 }
                 catch (err) {
+                    if (err instanceof ApiError && err.isOffline) {
+                        finishNoteMutation(id, mutation);
+                        set({ online: false });
+                        rememberNotePatchIntent(id, 'patch', queuedPatch);
+                        await localDb.mergeNotePatchOutbox(id, 'patch', queuedPatch).catch(() => { });
+                        return;
+                    }
                     const server = err instanceof ApiError && err.isConflict
                         ? (err.details as { server?: Note } | undefined)?.server
                         : undefined;
@@ -760,6 +780,22 @@ export const useNotes = create<NotesState>((set, get) => ({
             return;
         if (wasOpen)
             useUi.getState().removeWorkspaceNote(id);
+        if (!get().online) {
+            const pending = dirty.get(id);
+            if (pending)
+                await pending.persisted;
+            finishNoteMutation(id, mutation);
+            rememberNotePatchIntent(id, 'delete', { deletedAt, updatedAt: deletedAt });
+            await localDb.mergeNotePatchOutbox(id, 'delete', { deletedAt, updatedAt: deletedAt }).catch(() => { });
+            useUi.getState().toast({
+                title: t("notes.moved_to_trash"),
+                action: {
+                    label: t("common.undo"),
+                    run: () => void get().restoreNote(id),
+                },
+            });
+            return;
+        }
         await enqueueNoteWrite(id, async () => {
             if (!(await saveDirtyBeforeDestructiveMutation(id, set, get))) {
                 finishNoteMutation(id, mutation);
@@ -785,6 +821,13 @@ export const useNotes = create<NotesState>((set, get) => ({
                 });
             }
             catch (err) {
+                if (err instanceof ApiError && err.isOffline) {
+                    finishNoteMutation(id, mutation);
+                    set({ online: false });
+                    rememberNotePatchIntent(id, 'delete', { deletedAt, updatedAt: deletedAt });
+                    await localDb.mergeNotePatchOutbox(id, 'delete', { deletedAt, updatedAt: deletedAt }).catch(() => { });
+                    return;
+                }
                 await recoverNoteMutation(id, mutation, err, set, get);
                 if (wasOpen && get().notes[id]?.deletedAt === null)
                     restoreWorkspaceState(workspaceBefore);
@@ -796,6 +839,13 @@ export const useNotes = create<NotesState>((set, get) => ({
         const mutation = beginNoteMutation(id, { deletedAt: null }, set, get);
         if (!mutation)
             return;
+        if (!get().online) {
+            finishNoteMutation(id, mutation);
+            rememberNotePatchIntent(id, 'restore', { deletedAt: null });
+            await localDb.mergeNotePatchOutbox(id, 'restore', { deletedAt: null }).catch(() => { });
+            useUi.getState().toast({ title: t("notes.restored"), tone: 'success' });
+            return;
+        }
         await enqueueNoteWrite(id, async () => {
             try {
                 const note = await api.notes.restore(id);
@@ -804,6 +854,13 @@ export const useNotes = create<NotesState>((set, get) => ({
                 useUi.getState().toast({ title: t("notes.restored"), tone: 'success' });
             }
             catch (err) {
+                if (err instanceof ApiError && err.isOffline) {
+                    finishNoteMutation(id, mutation);
+                    set({ online: false });
+                    rememberNotePatchIntent(id, 'restore', { deletedAt: null });
+                    await localDb.mergeNotePatchOutbox(id, 'restore', { deletedAt: null }).catch(() => { });
+                    return;
+                }
                 await recoverNoteMutation(id, mutation, err, set, get);
                 toastError(err, t("common.restore_failed"));
             }
@@ -1024,6 +1081,20 @@ export const useNotes = create<NotesState>((set, get) => ({
             noteCount: 0,
         };
         const mutation = beginFolderMutation(id, false, (folders) => folders.some((item) => item.id === id) ? folders : [...folders, folder], set, get);
+        const queued: FolderOutboxItem = {
+            id: newLocalWriteId(),
+            kind: 'create',
+            folderId: id,
+            name,
+            parentId,
+            icon: folder.icon,
+            color: folder.color,
+            createdAt: now,
+        };
+        if (!get().online) {
+            void localDb.enqueueFolderOutbox(queued).catch(() => { });
+            return id;
+        }
         void enqueueFolderWrite(id, () => api.folders.create({
             id,
             name,
@@ -1033,6 +1104,11 @@ export const useNotes = create<NotesState>((set, get) => ({
         })).then((saved) => {
             commitFolderMutation(mutation, saved, set, get);
         }).catch((err) => {
+            if (err instanceof ApiError && err.isOffline) {
+                set({ online: false });
+                void localDb.enqueueFolderOutbox(queued).catch(() => { });
+                return;
+            }
             rollbackFolderMutation(mutation, set, get);
             toastError(err, t("sidebar.failed_to_create_folder"));
         });
@@ -1049,9 +1125,25 @@ export const useNotes = create<NotesState>((set, get) => ({
         if (normalized.name === '' || normalized.parentId === id)
             return false;
         const mutation = beginFolderMutation(id, false, (folders) => applyOptimisticFolderPatch(folders, id, normalized), set, get);
+        const queued: FolderOutboxItem = {
+            id: newLocalWriteId(),
+            kind: 'patch',
+            folderId: id,
+            patch: normalized,
+            createdAt: Date.now(),
+        };
+        if (!get().online) {
+            void localDb.enqueueFolderOutbox(queued).catch(() => { });
+            return true;
+        }
         void enqueueFolderWrite(id, () => api.folders.patch(id, normalized)).then((saved) => {
             commitFolderMutation(mutation, saved, set, get);
         }).catch((err) => {
+            if (err instanceof ApiError && err.isOffline) {
+                set({ online: false });
+                void localDb.enqueueFolderOutbox(queued).catch(() => { });
+                return;
+            }
             rollbackFolderMutation(mutation, set, get);
             toastError(err, normalized.name !== undefined ? t("sidebar.rename_failed") : t("sidebar.move_failed"));
         });
@@ -1061,6 +1153,10 @@ export const useNotes = create<NotesState>((set, get) => ({
         const folder = get().folders.find((item) => item.id === id);
         if (!folder)
             return false;
+        if (!get().online) {
+            useUi.getState().toast({ title: t("sidebar.offline_delete_unavailable"), tone: 'danger' });
+            return false;
+        }
         const noteMutations: Array<[string, PendingNoteMutation]> = [];
         const movedAt = Date.now();
         for (const note of Object.values(get().notes)) {
@@ -1135,7 +1231,9 @@ export const useNotes = create<NotesState>((set, get) => ({
         }
     },
     replayPending() {
-        return replayOutbox(get, set);
+        return replayOutbox(get, set)
+            .then(() => replayFolderOutbox(set, get))
+            .then(() => replayNotePatchOutbox(set, get));
     },
     setOnline(online) {
         set({ online });
@@ -1144,6 +1242,8 @@ export const useNotes = create<NotesState>((set, get) => ({
                 .pull()
                 .catch(() => { })
                 .then(() => replayOutbox(get, set))
+                .then(() => replayFolderOutbox(set, get))
+                .then(() => replayNotePatchOutbox(set, get))
                 .catch(() => { });
         }
     },
@@ -2001,6 +2101,7 @@ async function materializeDraft(id: string, set: SetNotesState, get: () => Notes
     finally {
         if (pendingNoteCreates.get(id) === request)
             pendingNoteCreates.delete(id);
+        refreshPendingCount();
     }
 }
 function discardDraft(id: string, set: SetNotesState, get: () => NotesState, silent = false): void {
@@ -2251,8 +2352,7 @@ function replayOutbox(get: () => NotesState, set: SetNotesState): Promise<void> 
     }).then(async (acquired) => {
         if (acquired)
             return;
-        const pending = await localDb.getOutbox();
-        set({ pendingCount: pendingNoteCount(pending) });
+        set({ pendingCount: await computePendingCount() });
     }).finally(() => {
         outboxReplayPromise = null;
     });
@@ -2470,8 +2570,7 @@ async function replayOutboxNow(get: () => NotesState, set: SetNotesState): Promi
             }
         }
     }
-    const remaining = await localDb.getOutbox();
-    set({ pendingCount: pendingNoteCount(remaining) });
+    set({ pendingCount: await computePendingCount() });
 }
 function pendingNoteCount(outbox: OutboxItem[]): number {
     const ids = new Set(outbox.map((item) => item.noteId));
@@ -2479,9 +2578,26 @@ function pendingNoteCount(outbox: OutboxItem[]): number {
         ids.add(id);
     return ids.size;
 }
+
+async function computePendingCount(): Promise<number> {
+    const [outbox, folders, patches] = await Promise.all([
+        localDb.getOutbox().catch(() => [] as OutboxItem[]),
+        localDb.getFolderOutbox().catch(() => []),
+        localDb.getNotePatchOutbox().catch(() => []),
+    ]);
+    return pendingNoteCount(outbox) + folders.length + patches.length + countUnsavedDrafts(useNotes.getState());
+}
+function countUnsavedDrafts(state: NotesState): number {
+    let count = 0;
+    for (const id of state.drafts)
+        if (!isBlankDraft(state, id))
+            count++;
+    return count;
+}
+
 function refreshPendingCount(): void {
-    void localDb.getOutbox()
-        .then((outbox) => useNotes.setState({ pendingCount: pendingNoteCount(outbox) }))
+    void computePendingCount()
+        .then((pendingCount) => useNotes.setState({ pendingCount }))
         .catch(() => { });
 }
 export function acknowledgeOutboxBaseAdvanced(
@@ -2746,6 +2862,196 @@ function toastError(err: unknown, fallback: string): void {
         tone: 'danger',
     });
 }
+
+let folderOutboxReplayPromise: Promise<void> | null = null;
+
+interface NotePatchIntent {
+    kind: 'patch' | 'delete' | 'restore';
+    patch: Record<string, unknown>;
+}
+
+const pendingNotePatchIntents = new Map<string, NotePatchIntent>();
+
+function rememberNotePatchIntent(noteId: string, kind: NotePatchIntent['kind'], patch: Record<string, unknown>): void {
+    const previous = pendingNotePatchIntents.get(noteId);
+    if (previous && ((previous.kind === 'delete' && kind === 'restore') || (previous.kind === 'restore' && kind === 'delete'))) {
+        pendingNotePatchIntents.delete(noteId);
+        return;
+    }
+    pendingNotePatchIntents.set(noteId, { kind, patch: { ...previous?.patch, ...patch } });
+}
+
+function applyNotePatchIntents(notes: Record<string, NoteSummary>): Record<string, NoteSummary> {
+    if (!pendingNotePatchIntents.size)
+        return notes;
+    let next = notes;
+    for (const [id, intent] of pendingNotePatchIntents) {
+        const note = next[id];
+        if (!note)
+            continue;
+        const patched: NoteSummary = intent.kind === 'delete'
+            ? { ...note, deletedAt: typeof intent.patch.deletedAt === 'number' ? intent.patch.deletedAt : note.deletedAt ?? Date.now() }
+            : intent.kind === 'restore'
+                ? { ...note, deletedAt: null }
+                : { ...note, ...(intent.patch as Partial<NoteSummary>) };
+        if (next === notes)
+            next = { ...notes };
+        next[id] = patched;
+    }
+    return next;
+}
+
+async function replayFolderOutbox(set: SetNotesState, get: () => NotesState): Promise<void> {
+    if (folderOutboxReplayPromise)
+        return folderOutboxReplayPromise;
+    folderOutboxReplayPromise = (async () => {
+        const items = (await localDb.getFolderOutbox()).sort((left, right) => left.createdAt - right.createdAt);
+        for (const item of items) {
+            try {
+                const saved = item.kind === 'create'
+                    ? await api.folders.create({
+                        id: item.folderId,
+                        name: item.name ?? '',
+                        parentId: item.parentId ?? null,
+                        icon: item.icon ?? null,
+                        ...(item.color ? { color: item.color } : {}),
+                    })
+                    : await api.folders.patch(item.folderId, item.patch ?? {});
+                applyServerFolder(saved, set, get);
+                await localDb.completeFolderOutboxItem(item.id);
+                set({ online: true });
+            }
+            catch (err) {
+                if (err instanceof ApiError && err.isOffline) {
+                    set({ online: false });
+                    break;
+                }
+                if (err instanceof ApiError && err.isConflict && await retryFolderWriteAfterConflict(item, set, get)) {
+                    await localDb.completeFolderOutboxItem(item.id).catch(() => { });
+                    continue;
+                }
+                await localDb.completeFolderOutboxItem(item.id).catch(() => { });
+                toastError(err, item.kind === 'create' ? t("sidebar.failed_to_create_folder") : t("sidebar.rename_failed"));
+            }
+        }
+    })().finally(() => {
+        folderOutboxReplayPromise = null;
+    });
+    return folderOutboxReplayPromise;
+}
+
+async function retryFolderWriteAfterConflict(item: FolderOutboxItem, set: SetNotesState, get: () => NotesState): Promise<boolean> {
+    try {
+        await get().pull({ force: true });
+    }
+    catch {
+    }
+    try {
+        const saved = item.kind === 'create'
+            ? await api.folders.create({
+                id: item.folderId,
+                name: item.name ?? '',
+                parentId: item.parentId ?? null,
+                icon: item.icon ?? null,
+                ...(item.color ? { color: item.color } : {}),
+            })
+            : await api.folders.patch(item.folderId, item.patch ?? {});
+        applyServerFolder(saved, set, get);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+
+function applyServerFolder(saved: Folder, set: SetNotesState, get: () => NotesState): void {
+    set((state) => ({
+        folders: state.folders.some((folder) => folder.id === saved.id)
+            ? state.folders.map((folder) => (folder.id === saved.id ? normalizeFolder(saved) : folder))
+            : [...state.folders, normalizeFolder(saved)],
+    }));
+    folderStateGeneration++;
+    scheduleShellSave(get);
+}
+
+let notePatchReplayPromise: Promise<void> | null = null;
+
+async function replayNotePatchOutbox(set: SetNotesState, get: () => NotesState): Promise<void> {
+    if (notePatchReplayPromise)
+        return notePatchReplayPromise;
+    notePatchReplayPromise = (async () => {
+        const items = (await localDb.getNotePatchOutbox()).sort((left, right) => left.createdAt - right.createdAt);
+        for (const item of items) {
+            const summary = get().notes[item.noteId];
+            if (!summary) {
+                await localDb.completeNotePatchOutbox(item.noteId).catch(() => { });
+                continue;
+            }
+            try {
+                const saved = item.kind === 'delete'
+                    ? await api.notes.remove(item.noteId)
+                    : item.kind === 'restore'
+                        ? await api.notes.restore(item.noteId)
+                        : await api.notes.patch(item.noteId, {
+                            rev: dirty.get(item.noteId)?.rev ?? summary.rev,
+                            ...item.patch,
+                        });
+                adoptNote(saved, set, get);
+                pendingNotePatchIntents.delete(item.noteId);
+                await localDb.completeNotePatchOutbox(item.noteId);
+                set({ online: true, lastSavedAt: Date.now() });
+            }
+            catch (err) {
+                if (err instanceof ApiError && err.isOffline) {
+                    set({ online: false });
+                    break;
+                }
+                if (err instanceof ApiError && err.isConflict) {
+                    const server = (err.details as { server?: Note } | undefined)?.server;
+                    if (server && await retryNotePatchAfterConflict(item, server, set, get)) {
+                        pendingNotePatchIntents.delete(item.noteId);
+                        await localDb.completeNotePatchOutbox(item.noteId).catch(() => { });
+                        set({ online: true, lastSavedAt: Date.now() });
+                        continue;
+                    }
+                }
+                pendingNotePatchIntents.delete(item.noteId);
+                await localDb.completeNotePatchOutbox(item.noteId).catch(() => { });
+                toastError(err, t("common.action_failed"));
+            }
+        }
+    })().finally(() => {
+        notePatchReplayPromise = null;
+    });
+    return notePatchReplayPromise;
+}
+
+async function retryNotePatchAfterConflict(
+    item: NotePatchOutboxItem,
+    server: Note,
+    set: SetNotesState,
+    get: () => NotesState,
+): Promise<boolean> {
+    adoptNote(server, set, get);
+    const settled = item.kind === 'delete' ? server.deletedAt !== null
+        : item.kind === 'restore' ? server.deletedAt === null
+            : false;
+    if (settled)
+        return true;
+    try {
+        const saved = item.kind === 'delete'
+            ? await api.notes.remove(item.noteId)
+            : item.kind === 'restore'
+                ? await api.notes.restore(item.noteId)
+                : await api.notes.patch(item.noteId, { rev: server.rev, ...item.patch });
+        adoptNote(saved, set, get);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+
 export interface NoteGroup {
     key: string;
     label: string;

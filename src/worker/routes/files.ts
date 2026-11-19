@@ -222,7 +222,7 @@ filesRoutes.get('/:id', async (c) => {
 
   const headers = new Headers({
     'Content-Type': row.mime,
-    'Cache-Control': 'private, no-store',
+    'Cache-Control': 'private, max-age=31536000, immutable',
     'Content-Disposition': `${isInlineSafe(row.mime) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeContentDispositionFilename(row.filename)}`,
     'X-Content-Type-Options': 'nosniff',
   })

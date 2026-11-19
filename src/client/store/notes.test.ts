@@ -1,11 +1,38 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { Note, SyncResponse } from '@shared/types'
 
-const mocks = vi.hoisted(() => ({ queue: [] as any[], get: vi.fn(), patch: vi.fn(), create: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  queue: [] as any[], folders: [] as any[], patches: [] as any[],
+  get: vi.fn(), patch: vi.fn(), create: vi.fn(), remove: vi.fn(), restore: vi.fn(), sync: vi.fn(),
+  folderCreate: vi.fn(), folderPatch: vi.fn(),
+}))
 vi.mock('../lib/db', () => ({
   localDb: {
     scheduleShellSave: vi.fn(), setContent: vi.fn(async () => {}), dropContent: vi.fn(async () => {}),
     getOutbox: async () => mocks.queue,
+    getFolderOutbox: async () => mocks.folders,
+    enqueueFolderOutbox: async (item: any) => {
+      mocks.folders = [...mocks.folders.filter((entry) => entry.id !== item.id), item]
+    },
+    completeFolderOutboxItem: async (id: string) => {
+      mocks.folders = mocks.folders.filter((entry) => entry.id !== id)
+    },
+    getNotePatchOutbox: async () => mocks.patches,
+    mergeNotePatchOutbox: async (noteId: string, kind: string, patch: Record<string, unknown>) => {
+      const previous = mocks.patches.find((entry: any) => entry.noteId === noteId)
+      const rest = mocks.patches.filter((entry: any) => entry.noteId !== noteId)
+      if (previous && ((previous.kind === 'delete' && kind === 'restore') || (previous.kind === 'restore' && kind === 'delete'))) {
+        mocks.patches = rest
+        return
+      }
+      mocks.patches = [
+        ...rest,
+        { noteId, kind, patch: { ...previous?.patch, ...patch }, createdAt: previous?.createdAt ?? Date.now() },
+      ]
+    },
+    completeNotePatchOutbox: async (noteId: string) => {
+      mocks.patches = mocks.patches.filter((entry: any) => entry.noteId !== noteId)
+    },
     enqueueOutbox: async (item: any) => { mocks.queue = [...mocks.queue.filter((q) => q.id !== item.id), item] },
     completeOutboxItem: async (id: string, writeId: string) => {
       mocks.queue = mocks.queue.filter((q) => q.id !== id || q.writeId !== writeId)
@@ -20,7 +47,7 @@ vi.mock('../lib/db', () => ({
 }))
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<any>('../lib/api')
-  return { ...actual, api: { ...actual.api, notes: { get: mocks.get, patch: mocks.patch, create: mocks.create } } }
+  return { ...actual, api: { ...actual.api, sync: mocks.sync, notes: { get: mocks.get, patch: mocks.patch, create: mocks.create, remove: mocks.remove, restore: mocks.restore }, folders: { create: mocks.folderCreate, patch: mocks.folderPatch } } }
 })
 import { useNotes } from './notes'
 import { useUi } from './ui'
@@ -40,7 +67,14 @@ function sync(remote: Note): SyncResponse {
 beforeEach(() => {
   vi.useFakeTimers()
   mocks.queue = []
+  mocks.folders = []
+  mocks.patches = []
   mocks.get.mockReset(); mocks.patch.mockReset(); mocks.create.mockReset()
+  mocks.folderCreate.mockReset(); mocks.folderPatch.mockReset()
+  mocks.remove.mockReset(); mocks.restore.mockReset()
+  mocks.sync.mockReset()
+  mocks.sync.mockRejectedValue(new Error('sync is unavailable in this test'))
+  mocks.get.mockResolvedValue({ ...note })
   useNotes.setState({ notes: { [note.id]: note }, contents: { [note.id]: note.content },
     folders: [], tags: [], cursor: 1, pendingCount: 0, online: true, drafts: new Set<string>() })
   useUi.setState({ activeNoteId: null, workspacePrimaryNoteId: null, workspaceSecondaryNoteId: null })
@@ -98,6 +132,18 @@ it('keeps a blank draft local while the body has no text', async () => {
   expect(useNotes.getState().drafts.has(id)).toBe(true)
 })
 
+it('counts a draft as pending once it holds text the server never received', async () => {
+  mocks.create.mockRejectedValue(new ApiError(0, 'offline', 'no network'))
+  useNotes.setState({ online: false })
+  const id = (await useNotes.getState().createNote({ open: false }))!
+  await useNotes.getState().flush({ immediate: true })
+  expect(useNotes.getState().pendingCount).toBe(0)
+
+  useNotes.getState().editTitle(id, 'offline draft')
+  await vi.waitFor(() => expect(useNotes.getState().pendingCount).toBe(1))
+  expect(useNotes.getState().drafts.has(id)).toBe(true)
+})
+
 it('applies draft patches locally without hitting the server', async () => {
   const id = (await useNotes.getState().createNote({ open: false }))!
   await useNotes.getState().patchNote(id, { isPinned: true, isStarred: true })
@@ -140,4 +186,147 @@ it('keeps a draft that already has text when switching away', async () => {
   useUi.setState({ activeNoteId: id, workspacePrimaryNoteId: id })
   useUi.setState({ activeNoteId: note.id, workspacePrimaryNoteId: note.id })
   expect(useNotes.getState().notes[id]).toBeTruthy()
+})
+
+it('queues folder creation while offline and replays it once back online', async () => {
+  mocks.folderCreate.mockImplementation(async (input: any) => ({
+    id: input.id, parentId: input.parentId ?? null, name: input.name,
+    icon: null, color: null, position: 1000, createdAt: 1, updatedAt: 1, noteCount: 0,
+  }))
+  useNotes.setState({ online: false })
+  const id = useNotes.getState().createFolder({ name: 'offline folder' })
+  expect(id).toBeTruthy()
+  expect(mocks.folderCreate).not.toHaveBeenCalled()
+  expect(useNotes.getState().folders.some((folder) => folder.id === id)).toBe(true)
+  expect(mocks.folders).toHaveLength(1)
+
+  useNotes.setState({ online: true })
+  await useNotes.getState().replayPending()
+
+  expect(mocks.folderCreate).toHaveBeenCalledTimes(1)
+  expect(mocks.folders).toHaveLength(0)
+  expect(useNotes.getState().folders.some((folder) => folder.id === id)).toBe(true)
+})
+
+it('keeps the queued folder when replaying while still offline', async () => {
+  mocks.folderCreate.mockRejectedValue(new ApiError(0, 'offline', 'no network'))
+  useNotes.setState({ online: false })
+  const id = useNotes.getState().createFolder({ name: 'offline folder' })
+  await useNotes.getState().replayPending()
+  expect(mocks.folders).toHaveLength(1)
+  expect(useNotes.getState().folders.some((folder) => folder.id === id)).toBe(true)
+  expect(useNotes.getState().online).toBe(false)
+})
+
+it('queues note field changes while offline and replays them back online', async () => {
+  mocks.patch.mockResolvedValue({ ...note, isStarred: true, rev: 2 })
+  useNotes.setState({ online: false })
+  await useNotes.getState().patchNote(note.id, { isStarred: true })
+
+  expect(mocks.patch).not.toHaveBeenCalled()
+  expect(useNotes.getState().notes[note.id]).toMatchObject({ isStarred: true })
+  expect(mocks.patches).toHaveLength(1)
+
+  useNotes.setState({ online: true })
+  await useNotes.getState().replayPending()
+
+  expect(mocks.patch).toHaveBeenCalledTimes(1)
+  expect(mocks.patches).toHaveLength(0)
+  expect(useNotes.getState().notes[note.id]).toMatchObject({ isStarred: true, rev: 2 })
+})
+
+it('merges repeated offline field changes into one queued patch', async () => {
+  useNotes.setState({ online: false })
+  await useNotes.getState().patchNote(note.id, { isStarred: true })
+  await useNotes.getState().patchNote(note.id, { isPinned: true })
+  expect(mocks.patches).toHaveLength(1)
+  expect(mocks.patches[0].patch).toMatchObject({ isStarred: true, isPinned: true })
+})
+
+it('queues note deletion while offline and replays it back online', async () => {
+  mocks.remove.mockResolvedValue({ ...note, deletedAt: Date.now() })
+  useNotes.setState({ online: false })
+  await useNotes.getState().deleteNote(note.id)
+
+  expect(useNotes.getState().notes[note.id].deletedAt).toBeTruthy()
+  expect(mocks.patches).toHaveLength(1)
+  expect(mocks.patches[0].kind).toBe('delete')
+
+  useNotes.setState({ online: true })
+  await useNotes.getState().replayPending()
+  expect(mocks.remove).toHaveBeenCalledTimes(1)
+  expect(mocks.patches).toHaveLength(0)
+})
+
+it('drops the queued deletion when the note is restored before it syncs', async () => {
+  useNotes.setState({ online: false })
+  await useNotes.getState().deleteNote(note.id)
+  expect(mocks.patches).toHaveLength(1)
+  await useNotes.getState().restoreNote(note.id)
+  expect(mocks.patches).toHaveLength(0)
+  expect(useNotes.getState().notes[note.id].deletedAt).toBeNull()
+})
+
+it('keeps an offline deletion applied when a sync pull returns the untouched note', async () => {
+  useNotes.setState({ online: false })
+  await useNotes.getState().deleteNote(note.id)
+  useNotes.getState().applySync(sync({ ...note, deletedAt: null }))
+  expect(useNotes.getState().notes[note.id].deletedAt).toBeTruthy()
+})
+
+it('keeps an offline restore applied when a sync pull still reports the note as trashed', async () => {
+  useNotes.setState({ notes: { [note.id]: { ...note, deletedAt: 5 } }, online: false })
+  await useNotes.getState().restoreNote(note.id)
+  useNotes.getState().applySync(sync({ ...note, deletedAt: 5, rev: 2 }))
+  expect(useNotes.getState().notes[note.id].deletedAt).toBeNull()
+})
+
+it('replays a queued field change against the server revision after a conflict', async () => {
+  useNotes.setState({ online: false })
+  await useNotes.getState().patchNote(note.id, { isStarred: true })
+  const server = { ...note, rev: 2, isPinned: true }
+  mocks.patch
+    .mockRejectedValueOnce(new ApiError(409, 'conflict', 'conflict', { server }))
+    .mockResolvedValueOnce({ ...server, rev: 3, isStarred: true })
+
+  useNotes.setState({ online: true })
+  await useNotes.getState().replayPending()
+
+  expect(mocks.patch).toHaveBeenCalledTimes(2)
+  expect(mocks.patch.mock.calls[1][1]).toMatchObject({ rev: 2, isStarred: true })
+  expect(mocks.patches).toHaveLength(0)
+  expect(useNotes.getState().notes[note.id]).toMatchObject({ isStarred: true, isPinned: true, rev: 3 })
+})
+
+it('treats a queued deletion as done when the server already trashed the note', async () => {
+  useNotes.setState({ online: false })
+  await useNotes.getState().deleteNote(note.id)
+  mocks.remove.mockRejectedValue(new ApiError(409, 'conflict', 'conflict', {
+    server: { ...note, rev: 2, deletedAt: 5000 },
+  }))
+
+  useNotes.setState({ online: true })
+  await useNotes.getState().replayPending()
+
+  expect(mocks.remove).toHaveBeenCalledTimes(1)
+  expect(mocks.patches).toHaveLength(0)
+  expect(useNotes.getState().notes[note.id].deletedAt).toBe(5000)
+})
+
+it('retries a queued folder creation once after a conflict', async () => {
+  mocks.folderCreate
+    .mockRejectedValueOnce(new ApiError(409, 'conflict', 'conflict'))
+    .mockImplementationOnce(async (input: any) => ({
+      id: input.id, parentId: input.parentId ?? null, name: input.name,
+      icon: null, color: null, position: 1000, createdAt: 1, updatedAt: 1, noteCount: 0,
+    }))
+  useNotes.setState({ online: false })
+  const id = useNotes.getState().createFolder({ name: 'offline folder' })
+
+  useNotes.setState({ online: true })
+  await useNotes.getState().replayPending()
+
+  expect(mocks.folderCreate).toHaveBeenCalledTimes(2)
+  expect(mocks.folders).toHaveLength(0)
+  expect(useNotes.getState().folders.some((folder) => folder.id === id)).toBe(true)
 })
