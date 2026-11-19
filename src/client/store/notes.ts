@@ -6,7 +6,7 @@ import { duplicateNoteTitle } from '@shared/text-utils';
 import { LIMITS } from '@shared/constants';
 import type { AppLocale, Folder, Note, NoteSummary, SortKey, SortOrder, SyncDeletion, SyncLink, SyncResponse, Tag, ViewKind, } from '@shared/types';
 import { api, ApiError, CLIENT_ID } from '../lib/api';
-import { localDb, publishBroadcast, type BroadcastPayload, type FolderOutboxItem, type NotePatchOutboxItem, type OutboxItem } from '../lib/db';
+import { localDb, publishBroadcast, SHELL_VERSION, type BroadcastPayload, type FolderOutboxItem, type NotePatchOutboxItem, type OutboxItem } from '../lib/db';
 import { folderDescendantIds } from '../lib/folders';
 import { buildTitleIndex, linksForContent } from '../lib/note-links';
 import { useSession } from './session';
@@ -149,6 +149,9 @@ const validatedRevisions = new Map<string, number>();
 const purgedNoteIds = new Map<string, number | null>();
 const noteRequestEpochs = new Map<string, number>();
 const STALE_NOTE_REQUEST = Symbol('stale-note-request');
+const FULL_SYNC_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const FULL_SYNC_SUSPECT_WINDOW_MS = 24 * 60 * 60 * 1000;
+let lastFullSyncAt = 0;
 export const useNotes = create<NotesState>((set, get) => ({
     notes: {},
     contents: {},
@@ -178,6 +181,7 @@ export const useNotes = create<NotesState>((set, get) => ({
 
                 const cached = await localDb.loadShell();
                 if (cached) {
+                    lastFullSyncAt = cached.fullSyncedAt;
                     const cachedNotes = Object.fromEntries(cached.notes.map((note) => {
                         const normalized = normalizeNoteSummaryTags(note);
                         return [normalized.id, normalized];
@@ -197,7 +201,13 @@ export const useNotes = create<NotesState>((set, get) => ({
                 }
                 let pullError: unknown;
                 try {
-                    await get().pull({ force: !cached });
+                    const now = Date.now();
+                    const linksLookMissing = cached !== null && Object.keys(cached.links).length === 0 &&
+                        cached.notes.length > 0 && now - lastFullSyncAt > FULL_SYNC_SUSPECT_WINDOW_MS;
+                    const stale = cached !== null && now - lastFullSyncAt > FULL_SYNC_MAX_AGE_MS;
+                    await get().pull({
+                        force: !cached || cached.version < SHELL_VERSION || linksLookMissing || stale,
+                    });
                 }
                 catch (err) {
                     pullError = err;
@@ -342,6 +352,8 @@ export const useNotes = create<NotesState>((set, get) => ({
         return tracked;
     },
     applySync(payload) {
+        if (payload.full && !payload.hasMore)
+            lastFullSyncAt = Date.now();
         if (payload.settingsChanged)
             void useSession.getState().refreshSettings().catch(() => { });
         if (payload.profileChanged || payload.siteChanged)
@@ -397,6 +409,8 @@ export const useNotes = create<NotesState>((set, get) => ({
                 cursor: payload.cursor,
                 drafts: [...state.drafts],
                 links,
+                version: SHELL_VERSION,
+                fullSyncedAt: lastFullSyncAt,
             });
             return { notes, links, folders, tags, cursor: payload.cursor };
         });
@@ -1165,10 +1179,7 @@ export const useNotes = create<NotesState>((set, get) => ({
         const folder = get().folders.find((item) => item.id === id);
         if (!folder)
             return false;
-        if (!get().online) {
-            useUi.getState().toast({ title: t("sidebar.offline_delete_unavailable"), tone: 'danger' });
-            return false;
-        }
+        const subtree = new Set([id, ...folderDescendantIds(get().folders, id)]);
         const noteMutations: Array<[string, PendingNoteMutation]> = [];
         const movedAt = Date.now();
         for (const note of Object.values(get().notes)) {
@@ -1180,20 +1191,47 @@ export const useNotes = create<NotesState>((set, get) => ({
         }
         const mutation = beginFolderMutation(id, true, (folders) => removeFolderAndPromoteChildren(folders, id), set, get);
         reconcileFolderUi(get().folders);
-        void enqueueFolderWrite(id, () => api.folders.remove(id, 'move-up')).then(() => {
+        const settleLocally = () => {
             finishFolderMutation(mutation);
             for (const [noteId, noteMutation] of noteMutations)
                 finishNoteMutation(noteId, noteMutation);
             scheduleShellSave(get);
-            void get().pull().catch(() => { });
-        }).catch((err) => {
+            void Promise.all([...subtree].map((folderId) => localDb.clearFolderOutboxForFolder(folderId))).catch(() => { });
+        };
+        const revert = () => {
             rollbackFolderMutation(mutation, set, get);
             for (const [noteId, noteMutation] of noteMutations) {
                 finishNoteMutation(noteId, noteMutation);
                 rollbackNoteMutation(noteId, noteMutation, set, get);
             }
-            toastError(err, t("common.delete_failed"));
-        });
+        };
+        void (async () => {
+            const queued = await localDb.getFolderOutbox().catch(() => [] as FolderOutboxItem[]);
+            const neverSynced = queued.some((item) => item.kind === 'create' && subtree.has(item.folderId));
+            if (neverSynced) {
+                settleLocally();
+                return;
+            }
+            if (!get().online) {
+                revert();
+                useUi.getState().toast({ title: t("sidebar.offline_delete_unavailable"), tone: 'danger' });
+                return;
+            }
+            try {
+                await enqueueFolderWrite(id, () => api.folders.remove(id, 'move-up'));
+                settleLocally();
+                void get().pull().catch(() => { });
+            }
+            catch (err) {
+                if (err instanceof ApiError && err.status === 404) {
+                    settleLocally();
+                    void get().pull().catch(() => { });
+                    return;
+                }
+                revert();
+                toastError(err, t("common.delete_failed"));
+            }
+        })();
         return true;
     },
     async refreshFolders() {
@@ -2019,6 +2057,8 @@ function scheduleShellSave(get: () => NotesState): void {
         cursor: state.cursor,
         drafts: [...state.drafts],
         links: state.links,
+        version: SHELL_VERSION,
+        fullSyncedAt: lastFullSyncAt,
     });
 }
 type DraftPatch = Partial<Pick<NoteSummary, 'isPinned' | 'isStarred' | 'isArchived'>> & { folderId?: string | null };
@@ -3083,6 +3123,8 @@ async function replayFolderOutbox(set: SetNotesState, get: () => NotesState): Pr
     folderOutboxReplayPromise = (async () => {
         const items = (await localDb.getFolderOutbox()).sort((left, right) => left.createdAt - right.createdAt);
         for (const item of items) {
+            if (item.nextAttemptAt !== undefined && item.nextAttemptAt > Date.now())
+                continue;
             try {
                 const saved = item.kind === 'create'
                     ? await api.folders.create({
@@ -3106,8 +3148,10 @@ async function replayFolderOutbox(set: SetNotesState, get: () => NotesState): Pr
                     await localDb.completeFolderOutboxItem(item.id).catch(() => { });
                     continue;
                 }
-                await localDb.completeFolderOutboxItem(item.id).catch(() => { });
-                toastError(err, item.kind === 'create' ? t("sidebar.failed_to_create_folder") : t("sidebar.rename_failed"));
+                const firstFailure = (item.attempts ?? 0) === 0;
+                await localDb.markFolderOutboxFailure(item.id, err instanceof Error ? err.message : String(err)).catch(() => { });
+                if (firstFailure)
+                    toastError(err, item.kind === 'create' ? t("sidebar.failed_to_create_folder") : t("sidebar.rename_failed"));
             }
         }
     })().finally(() => {

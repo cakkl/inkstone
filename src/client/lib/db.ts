@@ -17,6 +17,8 @@ const KEY = {
   folders: 'folders',
   tags: 'tags',
   links: 'links',
+  shellVersion: 'shell-version',
+  fullSyncedAt: 'full-synced-at',
   cursor: 'cursor',
   drafts: 'drafts',
   content: (id: string) => `note:${id}`,
@@ -35,7 +37,12 @@ interface ShellData {
   cursor: number
   drafts: string[]
   links: Record<string, SyncLink[]>
+  version: number
+  fullSyncedAt: number
 }
+
+/** 缓存结构版本：2 起包含 links 索引，旧版本缓存需要一次全量同步补齐。 */
+export const SHELL_VERSION = 2
 
 /** 跨标签页重放锁的最长等待时间；超时后调用方退回到「只刷新待办计数」。 */
 const OUTBOX_LOCK_WAIT_MS = 30_000
@@ -64,6 +71,9 @@ export interface FolderOutboxItem {
   kind: 'create' | 'patch'
   folderId: string
   createdAt: number
+  attempts?: number
+  nextAttemptAt?: number
+  lastError?: string
   name?: string
   parentId?: string | null
   icon?: string | null
@@ -264,17 +274,21 @@ export const localDb = {
     cursor: number
     drafts: string[]
     links: Record<string, SyncLink[]>
+    version: number
+    fullSyncedAt: number
   } | null> {
-    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor, KEY.drafts, KEY.links].map((key) => userScopedKey(key))
+    const shellKeys = [KEY.notes, KEY.folders, KEY.tags, KEY.cursor, KEY.drafts, KEY.links, KEY.shellVersion, KEY.fullSyncedAt].map((key) => userScopedKey(key))
     try {
       const values = await getMany(shellKeys, store)
-      const [notes, folders, tags, cursor, drafts, links] = values as [
+      const [notes, folders, tags, cursor, drafts, links, version, fullSyncedAt] = values as [
         NoteSummary[] | undefined,
         Folder[] | undefined,
         Tag[] | undefined,
         number | undefined,
         string[] | undefined,
         unknown,
+        number | undefined,
+        number | undefined,
       ]
       if (
         !Array.isArray(notes) || !notes.every(isNoteSummary) ||
@@ -291,6 +305,8 @@ export const localDb = {
         cursor,
         drafts: Array.isArray(drafts) ? drafts.filter((id): id is string => typeof id === 'string') : [],
         links: normalizeNoteLinks(links),
+        version: typeof version === 'number' && Number.isSafeInteger(version) ? version : 1,
+        fullSyncedAt: typeof fullSyncedAt === 'number' && Number.isFinite(fullSyncedAt) ? fullSyncedAt : 0,
       }
     } catch {
       return null
@@ -307,6 +323,8 @@ export const localDb = {
           [userScopedKey(KEY.cursor, userId), data.cursor],
           [userScopedKey(KEY.drafts, userId), data.drafts],
           [userScopedKey(KEY.links, userId), data.links],
+          [userScopedKey(KEY.shellVersion, userId), data.version],
+          [userScopedKey(KEY.fullSyncedAt, userId), data.fullSyncedAt],
         ],
         store,
       )
@@ -397,6 +415,27 @@ export const localDb = {
     return update<FolderOutboxItem[]>(
       userScopedKey(KEY.folderOutbox),
       (current) => normalizeFolderOutbox(current).filter((entry) => entry.id !== id),
+      store,
+    )
+  },
+
+  clearFolderOutboxForFolder(folderId: string): Promise<void> {
+    return update<FolderOutboxItem[]>(
+      userScopedKey(KEY.folderOutbox),
+      (current) => normalizeFolderOutbox(current).filter((entry) => entry.folderId !== folderId),
+      store,
+    )
+  },
+
+  markFolderOutboxFailure(id: string, message: string): Promise<void> {
+    return update<FolderOutboxItem[]>(
+      userScopedKey(KEY.folderOutbox),
+      (current) => normalizeFolderOutbox(current).map((entry) => {
+        if (entry.id !== id) return entry
+        const attempts = (entry.attempts ?? 0) + 1
+        const delay = Math.min(5 * 60_000, 1_000 * 2 ** (attempts - 1))
+        return { ...entry, attempts, lastError: message, nextAttemptAt: Date.now() + delay }
+      }),
       store,
     )
   },
