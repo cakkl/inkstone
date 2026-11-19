@@ -291,15 +291,18 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         if (!note)
             return;
         const payload = { title: note.title, content };
-        if (format === 'md') {
-            exportNoteAsMarkdown(payload);
-            return;
-        }
         try {
-            if (format === 'html')
+            if (format === 'md') {
+                const images = await exportNoteAsMarkdown(payload);
+                if (images)
+                    toast({ title: t("workspace.export_markdown_bundle", { value0: images }) });
+            }
+            else if (format === 'html') {
                 await exportNoteAsHtml(payload, locale);
-            else
+            }
+            else {
                 await exportNoteAsPdf(payload, locale);
+            }
         }
         catch (err) {
             toast({

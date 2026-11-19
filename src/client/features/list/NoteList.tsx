@@ -391,15 +391,18 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
             }
         }
         const payload = { title: note.title, content };
-        if (format === 'md') {
-            exportNoteAsMarkdown(payload);
-            return;
-        }
         try {
-            if (format === 'html')
+            if (format === 'md') {
+                const images = await exportNoteAsMarkdown(payload);
+                if (images)
+                    toast({ title: t("workspace.export_markdown_bundle", { value0: images }) });
+            }
+            else if (format === 'html') {
                 await exportNoteAsHtml(payload, locale);
-            else
+            }
+            else {
                 await exportNoteAsPdf(payload, locale);
+            }
         }
         catch (err) {
             toast({

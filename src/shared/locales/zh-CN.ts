@@ -1124,6 +1124,7 @@ export const ZH_CN_MESSAGES = {
     "workspace.export_failed": "导出失败",
     "workspace.export_html": "导出 HTML",
     "workspace.export_markdown": "导出 Markdown",
+    "workspace.export_markdown_bundle": "已导出 ZIP：笔记与 {value0} 个附件",
     "workspace.export_pdf": "导出 PDF",
     "workspace.footnote": "脚注",
     "workspace.heading_value0": "{value0} 级标题",

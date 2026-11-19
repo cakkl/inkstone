@@ -1,4 +1,21 @@
 import { renderMarkdown } from './markdown/renderer'
+import { api } from './api'
+import { extractAttachmentIds } from '@shared/markdown-utils'
+import { createZip } from '@shared/zip'
+
+const ATTACHMENT_LINK_RE =
+  /(?:https?:\/\/[^/\s<>"']+)?\/api\/files\/([0-9a-hjkmnp-tv-z]{26})(?=$|[\s>)\]"'?#])/g
+const UTF8_ENCODER = new TextEncoder()
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/apng': '.apng',
+  'image/avif': '.avif',
+  'image/bmp': '.bmp',
+  'image/gif': '.gif',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/svg+xml': '.svg',
+  'image/webp': '.webp',
+}
 
 /** 内联本地 KaTeX CSS：避免 CDN 依赖与版本硬编码漂移（约 24 KB，仅导出时加载）。 */
 async function localKatexCss(): Promise<string> {
@@ -11,7 +28,10 @@ async function localKatexCss(): Promise<string> {
 }
 
 export function downloadTextFile(filename: string, text: string, mime: string): void {
-  const blob = new Blob([text], { type: mime })
+  downloadBlob(filename, new Blob([text], { type: mime }))
+}
+
+export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -22,10 +42,93 @@ export function downloadTextFile(filename: string, text: string, mime: string): 
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export function exportNoteAsMarkdown(note: { title: string; content: string }): void {
-  const title = note.title.trim()
-  const frontMatter = title ? `---\ntitle: ${JSON.stringify(title)}\n---\n\n` : ''
-  downloadTextFile(`${safeFileName(title) || 'note'}.md`, `${frontMatter}${note.content}`, 'text/markdown;charset=utf-8')
+function frontMatter(title: string): string {
+  const value = title.trim()
+  return value ? `---\ntitle: ${JSON.stringify(value)}\n---\n\n` : ''
+}
+
+function markdownDocument(note: { title: string; content: string }): string {
+  return `${frontMatter(note.title)}${note.content}`
+}
+
+export async function exportNoteAsMarkdown(note: { title: string; content: string }): Promise<number> {
+  const name = safeFileName(note.title.trim()) || 'note'
+  const entries = await collectAttachments(note.content)
+  if (!entries.length) {
+    downloadTextFile(`${name}.md`, markdownDocument(note), 'text/markdown; charset=utf-8')
+    return 0
+  }
+  const directory = `${name}.assets`
+  const linkDirectory = `./${encodeAssetName(directory)}`
+  const links = new Map(entries.map((entry) => [entry.id, `${linkDirectory}/${encodeAssetName(entry.filename)}`]))
+  const body = note.content.replace(ATTACHMENT_LINK_RE, (match, id: string) => links.get(id) ?? match)
+  const archive = createZip([
+    { path: `${name}.md`, data: UTF8_ENCODER.encode(`${frontMatter(note.title)}${body}`) },
+    ...entries.map((entry) => ({ path: `${directory}/${entry.filename}`, data: entry.data })),
+  ])
+  downloadBlob(`${name}.zip`, new Blob([archive.buffer as ArrayBuffer], { type: 'application/zip' }))
+  return entries.length
+}
+
+interface ExportedAttachment {
+  id: string
+  filename: string
+  data: Uint8Array
+}
+
+async function collectAttachments(content: string): Promise<ExportedAttachment[]> {
+  const ids = extractAttachmentIds(content)
+  if (!ids.length)
+    return []
+  const names = await attachmentFilenames()
+  const used = new Set<string>()
+  const collected: ExportedAttachment[] = []
+  for (const id of ids) {
+    try {
+      const response = await fetch(`/api/files/${id}`, { credentials: 'same-origin' })
+      if (!response.ok)
+        continue
+      const blob = await response.blob()
+      const filename = uniqueAssetName(names.get(id) ?? `${id}${IMAGE_EXTENSIONS[blob.type] ?? ''}`, used)
+      collected.push({ id, filename, data: new Uint8Array(await blob.arrayBuffer()) })
+    }
+    catch {
+    }
+  }
+  return collected
+}
+
+async function attachmentFilenames(): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  let cursor: string | undefined
+  try {
+    do {
+      const page = await api.files.list(cursor)
+      for (const file of page.files)
+        names.set(file.id, file.filename)
+      cursor = page.nextCursor ?? undefined
+    } while (cursor)
+  }
+  catch {
+  }
+  return names
+}
+
+function uniqueAssetName(name: string, used: Set<string>): string {
+  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || 'file'
+  const dot = cleaned.lastIndexOf('.')
+  const stem = dot > 0 ? cleaned.slice(0, dot) : cleaned
+  const extension = dot > 0 ? cleaned.slice(dot) : ''
+  let candidate = cleaned
+  let index = 2
+  while (used.has(candidate.toLowerCase()))
+    candidate = `${stem}-${index++}${extension}`
+  used.add(candidate.toLowerCase())
+  return candidate
+}
+
+function encodeAssetName(name: string): string {
+  return name.replace(/[\s()<>#?%[\]]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)
 }
 
 export async function exportNoteAsHtml(note: { title: string; content: string }, language: string): Promise<void> {
@@ -78,7 +181,8 @@ async function waitForPrintReady(iframe: HTMLIFrameElement): Promise<void> {
 
 async function inlinePrivateImages(html: string): Promise<string> {
   const doc = new DOMParser().parseFromString(html, 'text/html')
-  const images = [...doc.querySelectorAll<HTMLImageElement>('img[src^="/api/files/"]')]
+  const images = [...doc.querySelectorAll<HTMLImageElement>('img')]
+    .filter((image) => /(?:^|[/:])api\/files\//.test(image.getAttribute('src') ?? ''))
   await Promise.all(images.map(async (image) => {
     try {
       const response = await fetch(image.getAttribute('src')!, { credentials: 'same-origin' })
