@@ -4,9 +4,10 @@ import type { Note, SyncResponse } from '@shared/types'
 const mocks = vi.hoisted(() => ({
   queue: [] as any[], folders: [] as any[], patches: [] as any[],
   get: vi.fn(), patch: vi.fn(), create: vi.fn(), remove: vi.fn(), restore: vi.fn(), sync: vi.fn(),
-  folderCreate: vi.fn(), folderPatch: vi.fn(),
+  folderCreate: vi.fn(), folderPatch: vi.fn(), folderRemove: vi.fn(),
 }))
 vi.mock('../lib/db', () => ({
+  SHELL_VERSION: 2,
   localDb: {
     scheduleShellSave: vi.fn(), setContent: vi.fn(async () => {}), dropContent: vi.fn(async () => {}),
     getContent: vi.fn(async () => undefined),
@@ -17,6 +18,13 @@ vi.mock('../lib/db', () => ({
     },
     completeFolderOutboxItem: async (id: string) => {
       mocks.folders = mocks.folders.filter((entry) => entry.id !== id)
+    },
+    clearFolderOutboxForFolder: async (folderId: string) => {
+      mocks.folders = mocks.folders.filter((entry) => entry.folderId !== folderId)
+    },
+    markFolderOutboxFailure: async (id: string) => {
+      mocks.folders = mocks.folders.map((entry) => entry.id === id
+        ? { ...entry, attempts: (entry.attempts ?? 0) + 1, nextAttemptAt: Date.now() + 1000 } : entry)
     },
     getNotePatchOutbox: async () => mocks.patches,
     mergeNotePatchOutbox: async (noteId: string, kind: string, patch: Record<string, unknown>) => {
@@ -48,7 +56,7 @@ vi.mock('../lib/db', () => ({
 }))
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<any>('../lib/api')
-  return { ...actual, api: { ...actual.api, sync: mocks.sync, notes: { get: mocks.get, patch: mocks.patch, create: mocks.create, remove: mocks.remove, restore: mocks.restore }, folders: { create: mocks.folderCreate, patch: mocks.folderPatch } } }
+  return { ...actual, api: { ...actual.api, sync: mocks.sync, notes: { get: mocks.get, patch: mocks.patch, create: mocks.create, remove: mocks.remove, restore: mocks.restore }, folders: { create: mocks.folderCreate, patch: mocks.folderPatch, remove: mocks.folderRemove } } }
 })
 import { useNotes } from './notes'
 import { prefetchRecentContents } from './notes'
@@ -72,7 +80,7 @@ beforeEach(() => {
   mocks.folders = []
   mocks.patches = []
   mocks.get.mockReset(); mocks.patch.mockReset(); mocks.create.mockReset()
-  mocks.folderCreate.mockReset(); mocks.folderPatch.mockReset()
+  mocks.folderCreate.mockReset(); mocks.folderPatch.mockReset(); mocks.folderRemove.mockReset();
   mocks.remove.mockReset(); mocks.restore.mockReset()
   mocks.sync.mockReset()
   mocks.sync.mockRejectedValue(new Error('sync is unavailable in this test'))
@@ -416,4 +424,43 @@ it('derives tag counts from the local notes instead of the server payload', () =
   useNotes.getState().applySync({ ...sync(note), notes: [], tags: [] })
 
   expect(useNotes.getState().tags[0]?.count).toBe(1)
+})
+
+it('treats a folder the server no longer has as already deleted', async () => {
+  const folder = {
+    id: 'folder-gone', parentId: null, name: 'Ghost', icon: null, color: null,
+    position: 1000, createdAt: 1, updatedAt: 1, noteCount: 0,
+  }
+  useNotes.setState({ folders: [folder] })
+  mocks.folderRemove.mockRejectedValueOnce(new ApiError(404, 'not_found', 'Folder not found'))
+
+  expect(useNotes.getState().deleteFolder(folder.id)).toBe(true)
+  await vi.waitFor(() => expect(mocks.folderRemove).toHaveBeenCalledTimes(1))
+
+  expect(useNotes.getState().folders.some((item) => item.id === folder.id)).toBe(false)
+})
+
+it('deletes a folder that never reached the server without calling the API', async () => {
+  useNotes.setState({ online: false })
+  const id = useNotes.getState().createFolder({ name: 'local only' })!
+  await vi.waitFor(() => expect(mocks.folders).toHaveLength(1))
+
+  expect(useNotes.getState().deleteFolder(id)).toBe(true)
+  await vi.waitFor(() => expect(useNotes.getState().folders.some((item) => item.id === id)).toBe(false))
+  await vi.waitFor(() => expect(mocks.folders).toHaveLength(0))
+
+  expect(mocks.folderRemove).not.toHaveBeenCalled()
+})
+
+it('keeps a queued folder when replaying fails so it can retry later', async () => {
+  useNotes.setState({ online: false })
+  const id = useNotes.getState().createFolder({ name: 'offline folder' })!
+  await vi.waitFor(() => expect(mocks.folders).toHaveLength(1))
+  mocks.folderCreate.mockRejectedValueOnce(new ApiError(400, 'bad_request', 'parent folder is gone'))
+
+  useNotes.setState({ online: true })
+  await useNotes.getState().replayPending()
+
+  expect(mocks.folders).toHaveLength(1)
+  expect(useNotes.getState().folders.some((item) => item.id === id)).toBe(true)
 })
