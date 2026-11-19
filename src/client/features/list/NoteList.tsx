@@ -33,8 +33,8 @@ const EMPTY_HIGHLIGHT: [
     number,
     number
 ][] = [];
-const INITIAL_RENDERED_NOTES = 180;
-const RENDERED_NOTES_STEP = 240;
+const INITIAL_RENDERED_NOTES = 60;
+const RENDERED_NOTES_STEP = 120;
 export function NoteList() {
     const locale = useLocale();
     const breakpoint = useBreakpoint();

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from 'react'
 import { ConfirmHost } from './components/overlay'
 import { Toaster } from './components/feedback'
 import { Spinner } from './components/primitives'
@@ -31,6 +31,10 @@ export function App() {
     void load()
   }, [load, shareSlug])
 
+  useLayoutEffect(() => {
+    performance.mark('inkstone:app-mounted')
+  }, [])
+
   useEffect(() => watchSystemTheme(), [])
 
   useEffect(() => {
@@ -42,7 +46,7 @@ export function App() {
   }, [shareSlug, status])
 
   useEffect(() => {
-    if (shareSlug || status !== 'loading') dismissBootScreen()
+    if (shareSlug || status === 'anonymous') dismissBootScreen()
   }, [status, shareSlug])
 
   useEffect(() => {

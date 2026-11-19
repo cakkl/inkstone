@@ -48,6 +48,26 @@ const katexWoff2Only = (): Plugin => ({
   },
 })
 
+const preloadAppShell = (): Plugin => ({
+  name: 'inkstone:preload-app-shell',
+  apply: 'build',
+  enforce: 'post',
+  generateBundle(_options, bundle) {
+    const shell = Object.values(bundle).find(
+      (file) => file.type === 'chunk' && file.name === 'AppShell',
+    )
+    if (!shell) return
+    for (const file of Object.values(bundle)) {
+      if (file.type !== 'asset' || !file.fileName.endsWith('.html')) continue
+      if (typeof file.source !== 'string') continue
+      file.source = file.source.replace(
+        '</head>',
+        `<link rel="modulepreload" crossorigin href="/${shell.fileName}"></head>`,
+      )
+    }
+  },
+})
+
 const getVendorChunkName = (id: string) => {
   if (!id.includes('node_modules') || preservesOnDemandBoundary(id)) return null
 
@@ -67,6 +87,7 @@ const config: UserConfigFnPromise = async ({ mode, command }) => ({
   plugins: [
     react(),
     katexWoff2Only(),
+    preloadAppShell(),
     tailwindcss(),
     inkstonePwa(),
     ...(mode === 'demo'

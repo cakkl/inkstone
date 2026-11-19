@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Eye, FileText, PanelLeft, PencilLine, UserRound } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { registerAll } from '../../lib/hotkeys';
@@ -14,6 +14,7 @@ import { EditorSkeleton } from '../../components/feedback';
 import { PANEL_WIDTHS, useUi } from '../../store/ui';
 import { createContextualNote, useNotes } from '../../store/notes';
 import { useSession } from '../../store/session';
+import { dismissBootScreen } from '../../lib/boot';
 import { Sidebar } from '../sidebar/Sidebar';
 import { NoteList } from '../list/NoteList';
 import { SearchButton } from './SearchButton';
@@ -29,9 +30,13 @@ const GraphPanel = lazy(() => import('../graph/GraphPanel').then((m) => ({ defau
 const SharePanel = lazy(() => import('../share/SharePanel').then((m) => ({ default: m.SharePanel })));
 const VersionsPanel = lazy(() => import('../workspace/VersionsPanel').then((m) => ({ default: m.VersionsPanel })));
 const Lightbox = lazy(() => import('../preview/Lightbox').then((m) => ({ default: m.Lightbox })));
+performance.mark('inkstone:shell-module');
 export function AppShell() {
     const breakpoint = useBreakpoint();
     const userId = useSession((s) => s.user?.id);
+    useLayoutEffect(() => {
+        dismissBootScreen();
+    }, []);
     useEffect(() => scheduleSettingsWarmup(), [userId]);
     useSyncEngine();
     useGlobalHotkeys();

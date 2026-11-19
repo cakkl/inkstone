@@ -15,8 +15,20 @@ async function start(): Promise<void> {
     await installDemoRuntime()
   }
 
-  const [{ App }, i18n] = await Promise.all([import('./App'), import('./lib/i18n')])
+  const sharePage = location.pathname.startsWith('/s/')
+  if (!sharePage)
+    void import('./features/shell/AppShell')
+
+  const [{ App }, i18n, session] = await Promise.all([
+    import('./App'),
+    import('./lib/i18n'),
+    import('./store/session'),
+  ])
+  performance.mark('inkstone:modules-ready')
+  if (!sharePage)
+    void session.useSession.getState().load()
   await i18n.initI18n()
+  performance.mark('inkstone:i18n-ready')
   const container = document.getElementById('root')
   if (!container) throw new Error(i18n.t("app.missing_root_mount_point"))
   createRoot(container).render(
