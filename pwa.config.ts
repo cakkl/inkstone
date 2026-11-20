@@ -28,6 +28,12 @@ const CORE_LAZY_MODULES = [
   '/src/shared/locales/zh-CN.ts',
 ] as const
 
+/** 缓存协议版本：缓存键或 SW 缓存语义变化时提升，内容变化靠 buildId。 */
+const PWA_CACHE_SCHEMA_VERSION = 'offline-shell-root-v2'
+
+// `/index.html` 会被 Assets 重定向到 `/`，预缓存与导航回退都必须用后者。
+const toRuntimeUrl = (fileName: string): string => (fileName === 'index.html' ? '/' : `/${fileName}`)
+
 type BuildChunk = {
   type: 'chunk'
   fileName: string
@@ -74,6 +80,7 @@ export function inkstonePwa(): Plugin {
         hash.update(fileName)
         hash.update(readFileSync(rootFile(`./public/${fileName}`)))
       }
+      hash.update(PWA_CACHE_SCHEMA_VERSION)
       const buildId = hash.digest('hex').slice(0, 16)
 
       this.emitFile({
@@ -81,8 +88,8 @@ export function inkstonePwa(): Plugin {
         fileName: 'sw.js',
         source: serviceWorkerSource(
           buildId,
-          coreFiles.map((fileName) => `/${fileName}`),
-          allFiles.map((fileName) => `/${fileName}`),
+          coreFiles.map(toRuntimeUrl),
+          allFiles.map(toRuntimeUrl),
         ),
       })
     },
@@ -144,6 +151,7 @@ function serviceWorkerSource(buildId: string, coreUrls: string[], allUrls: strin
 	const FILE_PATH_RE = new RegExp(${JSON.stringify('^/api/files/[0-9a-hjkmnp-tv-z]{26}$')})
 	const MAX_CACHED_FILES = 240
 	const MAX_CACHED_FILE_BYTES = 8 * 1024 * 1024
+let warmPromise = null
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const previousShells = (await caches.keys()).filter((key) =>
@@ -193,18 +201,26 @@ self.addEventListener('fetch', (event) => {
 	  ) return
 
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request).catch(async () => {
-        const shell = await caches.open(SHELL_CACHE)
-        const cached = await shell.match('/index.html')
-        return cached || Response.error()
-      }),
-    )
+    event.respondWith((async () => {
+      const shell = await caches.open(SHELL_CACHE)
+      try {
+        const response = await fetch(request)
+        if (!response.redirected && response.type !== 'opaqueredirect')
+          return response
+      } catch {
+      }
+      const cached = await shell.match('/')
+      if (cached) return cached
+      return new Response('Inkstone is not available offline.', {
+        status: 503,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
+    })())
     return
   }
 
   event.respondWith((async () => {
-    const cached = await caches.match(request, { ignoreSearch: true })
+    const cached = await caches.match(request, { ignoreSearch: true, ignoreVary: true })
     if (cached) return cached
     const response = await fetch(request)
     if (response.ok && OPTIONAL_URL_SET.has(url.pathname)) {
