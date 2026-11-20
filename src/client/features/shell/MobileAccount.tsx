@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeft, ChevronRight, LogOut, Waypoints } from 'lucide-react';
+import { ChevronRight, LogOut, Waypoints } from 'lucide-react';
 import { ACCENTS } from '@shared/constants';
 import { Avatar } from '../../components/primitives';
+import { OverlayHeader } from '../../components/overlay-header';
 import { t } from '../../lib/i18n';
 import { useSession } from '../../store/session';
 import { useUi } from '../../store/ui';
@@ -112,10 +113,7 @@ export function MobileAccount() {
     return (<div className="relative h-full min-h-0">
       {accountList}
       {detail && (<section ref={detailRef} {...swipe} className="mobile-settings-detail absolute inset-0 flex min-h-0 flex-col bg-[var(--bg-surface)]">
-        <header className="relative flex min-h-14 shrink-0 items-center border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3">
-            <button type="button" aria-label={t('mobile.back_to_account')} onClick={closeDetail} className="flex size-11 items-center justify-center rounded-lg active:bg-[var(--bg-active)]"><ArrowLeft size={20}/></button>
-            <h1 className="pointer-events-none absolute inset-x-14 text-center text-[15px] font-semibold">{SECTIONS.find((item) => item.id === detail)?.label()}</h1>
-        </header>
+        <OverlayHeader variant="back" title={SECTIONS.find((item) => item.id === detail)?.label() ?? ''} onClose={closeDetail}/>
         <div className="mobile-settings-content min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-[calc(24px+env(safe-area-inset-bottom))]">{detail === 'appearance' ? <AppearanceSettings accents={ACCENTS}/> : <SettingsPage section={detail}/>}</div>
       </section>)}
     </div>);

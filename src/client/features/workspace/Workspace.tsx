@@ -30,6 +30,7 @@ import { useSession } from '../../store/session';
 import { createContextualNote, useActiveNote, useNotes } from '../../store/notes';
 import { folderPathLabel, openFolderView } from '../../lib/folders';
 import { useSyncScroll } from './sync-scroll';
+import { runServerOnly as runServerOnlyAction } from './server-only';
 import { captureReadingPosition, readReadingPosition, readingPositionKey, restoreReadingPosition, writeReadingPosition } from './reading-position';
 import { t, useLocale } from "../../lib/i18n";
 import { preferredScrollBehavior } from '../../lib/motion';
@@ -302,25 +303,18 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         { id: 'html', label: t("workspace.export_html"), icon: <FileCode size={13}/>, onSelect: () => void exportNote('html') },
         { id: 'pdf', label: t("workspace.export_pdf"), icon: <FileDown size={13}/>, onSelect: () => void exportNote('pdf') },
     ];
+    // 移动端菜单项没有悬停提示的位置，改为「可点但弹说明」；桌面端仍保持禁用 + tooltip。
+    const runServerOnly = (run: () => void) => runServerOnlyAction(serverOnlyReason, (title) => toast({ title }), run);
+    const serverOnlyItem = (id: string, label: string, icon: MenuItem['icon'], run: () => void): MenuItem => isMobile
+        ? { id, label, icon, onSelect: () => runServerOnly(run) }
+        : { id, label, icon, disabled: serverOnlyDisabled, onSelect: run };
     const mobileItems: MenuItem[] = [
         ...(isMobile ? [
             { id: 'star', label: note.isStarred ? t("common.remove_from_favorites") : t("navigation.favorites"), checked: note.isStarred, onSelect: () => void patchNote(note.id, { isStarred: !note.isStarred }) },
-            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, disabled: isDraftNote, onSelect: toggleBacklinks },
+            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, onSelect: () => runServerOnly(toggleBacklinks) },
         ] : []),
-        {
-            id: 'versions',
-            label: t("common.version_history"),
-            icon: <History size={13}/>,
-            disabled: serverOnlyDisabled,
-            onSelect: () => openPanel('versions'),
-        },
-        {
-            id: 'share',
-            label: t("workspace.share"),
-            icon: <Share2 size={13}/>,
-            disabled: serverOnlyDisabled,
-            onSelect: () => openPanel('share'),
-        },
+        serverOnlyItem('versions', t("common.version_history"), <History size={13}/>, () => openPanel('versions')),
+        serverOnlyItem('share', t("workspace.share"), <Share2 size={13}/>, () => openPanel('share')),
         {
             id: 'export-md',
             label: t("workspace.export_markdown"),
@@ -371,6 +365,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         if (grouped && pane !== 'active' && !paneActive)
             activateWorkspacePane(pane);
     };
+    // 移动端进入式头部与 components/overlay-header.tsx 的 back 形态同一套尺寸（h-11 / px-3 / 32×32 按钮 / 16 图标）。
+    // 这里标题是可编辑输入框，不能直接用该组件，改任一边时需同步。
     return (<div role={grouped ? 'region' : undefined} aria-label={grouped ? (pane === 'secondary' ? t("workspace.right_note_pane") : t("workspace.left_note_pane")) : undefined} data-workspace-pane={grouped ? pane : undefined} onPointerDownCapture={activatePane} onFocusCapture={activatePane} className={cn('flex h-full min-h-0 flex-col bg-[var(--bg-editor)]', grouped && paneActive && 'shadow-[inset_0_2px_0_var(--accent)]')}>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] px-3">
         {isMobile && onMobileBack && (<Tooltip label={t("workspace.back_to_notes")} side="right">
