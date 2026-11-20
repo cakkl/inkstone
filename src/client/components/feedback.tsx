@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Check, Info, X, XCircle } from 'lucide-react';
 import { cn } from '../lib/cn';
@@ -23,26 +23,24 @@ function Toast({ item }: {
     item: ToastItem;
 }) {
     const dismiss = useUi((s) => s.dismissToast);
-    const [leaving, setLeaving] = useState(false);
     const pausedRef = useRef(false);
     const timerRef = useRef<number>(0);
-    const dismissTimerRef = useRef<number>(0);
     useEffect(() => {
+        if (item.duration <= 0 || item.leaving)
+            return;
         const start = () => {
             timerRef.current = window.setTimeout(() => {
                 if (pausedRef.current)
                     return start();
-                setLeaving(true);
-                dismissTimerRef.current = window.setTimeout(() => dismiss(item.id), 200);
+                dismiss(item.id);
             }, item.duration);
         };
         start();
         return () => {
             window.clearTimeout(timerRef.current);
-            window.clearTimeout(dismissTimerRef.current);
         };
-    }, [item.id, item.duration, dismiss]);
-    return (<div onMouseEnter={() => (pausedRef.current = true)} onMouseLeave={() => (pausedRef.current = false)} className={cn('pointer-events-auto flex w-[min(400px,calc(100vw-32px))] items-start gap-2.5', 'rounded-[var(--r-lg)] border border-[var(--border-default)] bg-[var(--bg-overlay)] p-3 pr-2', 'shadow-[var(--shadow-pop)] transition-all duration-200 ease-[var(--ease-out)]', leaving ? 'translate-x-2 opacity-0' : 'anim-slide-right')} role={item.tone === 'danger' ? 'alert' : 'status'}>
+    }, [item.id, item.duration, item.leaving, dismiss]);
+    return (<div onMouseEnter={() => (pausedRef.current = true)} onMouseLeave={() => (pausedRef.current = false)} className={cn('pointer-events-auto flex w-[min(400px,calc(100vw-32px))] items-start gap-2.5', 'rounded-[var(--r-lg)] border border-[var(--border-default)] bg-[var(--bg-overlay)] p-3 pr-2', 'shadow-[var(--shadow-pop)] transition-all duration-200 ease-[var(--ease-out)]', item.leaving ? 'translate-x-2 opacity-0' : 'anim-slide-right')} role={item.tone === 'danger' ? 'alert' : 'status'}>
       <span className={cn('mt-[1px] shrink-0', TONE_COLOR[item.tone])}>{TONE_ICON[item.tone]}</span>
       <div className="min-w-0 flex-1">
         <div className="text-[12.5px] leading-snug font-medium text-[var(--text-primary)]">

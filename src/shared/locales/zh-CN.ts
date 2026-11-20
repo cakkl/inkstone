@@ -1114,6 +1114,8 @@ export const ZH_CN_MESSAGES = {
     "workspace.export_html": "导出 HTML",
     "workspace.export_markdown": "导出 Markdown",
     "workspace.export_markdown_bundle": "已导出 ZIP：笔记与 {value0} 个附件",
+    "workspace.export_preparing": "正在打包，完成后会开始下载",
+    "workspace.export_embed_note": "嵌入的笔记：{value0}（导出文件不含其内容）",
     "workspace.export_pdf": "导出 PDF",
     "workspace.footnote": "脚注",
     "workspace.heading_value0": "{value0} 级标题",

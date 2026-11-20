@@ -23,6 +23,7 @@ import { Resizer, SplitResizer } from './Resizer';
 import { t } from "../../lib/i18n";
 import { SettingsPanel } from '../settings/SettingsPanel';
 import { scheduleSettingsWarmup } from '../settings/sections';
+import { GraphPanelShell } from '../graph/GraphPanelShell';
 const Workspace = lazy(() => import('../workspace/Workspace').then((m) => ({ default: m.Workspace })));
 const CommandPalette = lazy(() => import('../command/CommandPalette').then((m) => ({ default: m.CommandPalette })));
 const ShortcutsPanel = lazy(() => import('../command/ShortcutsPanel').then((m) => ({ default: m.ShortcutsPanel })));
@@ -247,10 +248,12 @@ function OverlayHost() {
       <Suspense fallback={null}>
         {(panel === 'command' || panel === 'search') && <CommandPalette key={panel} initialQuery={panel === 'command' ? '> ' : ''} onClose={closePanel}/>}
         {panel === 'shortcuts' && <ShortcutsPanel onClose={closePanel}/>}
-        {panel === 'graph' && <GraphPanel onClose={closePanel}/>}
         {panel === 'share' && <SharePanel onClose={closePanel}/>}
         {panel === 'versions' && <VersionsPanel onClose={closePanel}/>}
         {lightbox && <Lightbox />}
+      </Suspense>
+      <Suspense fallback={<GraphPanelShell onClose={closePanel}/>}>
+        {panel === 'graph' && <GraphPanel onClose={closePanel}/>}
       </Suspense>
     </>);
 }

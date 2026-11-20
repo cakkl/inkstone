@@ -17,6 +17,7 @@ import { createTag, deleteTag, renameTag, setTagColor } from '../tags/tagMutatio
 import { t, useLocale } from "../../lib/i18n";
 import { SearchButton } from '../shell/SearchButton';
 import { ExplorerNote, groupExplorerNotes } from './ExplorerNote';
+import { warmGraphPanel } from '../graph/warm';
 import { useBreakpoint } from '../../lib/hooks';
 export function Sidebar({ collapsed = false, onCollapse, }: {
     collapsed?: boolean;
@@ -120,6 +121,10 @@ function SidebarAccount({ rail = false }: {
     const openPanel = useUi((s) => s.openPanel);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const [menuOpen, setMenuOpen] = useState(false);
+    useEffect(() => {
+        if (menuOpen)
+            warmGraphPanel();
+    }, [menuOpen]);
     if (!user)
         return null;
     const isDark = theme === 'dark' ||

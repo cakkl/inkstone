@@ -17,7 +17,7 @@ import { EditorSkeleton, Empty } from '../../components/feedback';
 import { DeferredCodeEditor } from '../../editor/CodeEditor';
 import { insertFiles } from '../../editor/paste';
 import { optimizeImageFile } from '../../lib/image';
-import { exportNoteAsHtml, exportNoteAsMarkdown, exportNoteAsPdf } from '../../lib/export-note';
+import { exportNote as runNoteExport } from '../../lib/export-note';
 import { Preview } from '../preview/Preview';
 import { Outline } from '../preview/Outline';
 import { SplitResizer } from '../shell/Resizer';
@@ -295,27 +295,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         setExportMenuOpen(false);
         if (!note)
             return;
-        const payload = { title: note.title, content };
-        try {
-            if (format === 'md') {
-                const images = await exportNoteAsMarkdown(payload);
-                if (images)
-                    toast({ title: t("workspace.export_markdown_bundle", { value0: images }) });
-            }
-            else if (format === 'html') {
-                await exportNoteAsHtml(payload, locale);
-            }
-            else {
-                await exportNoteAsPdf(payload, locale);
-            }
-        }
-        catch (err) {
-            toast({
-                title: t("workspace.export_failed"),
-                description: err instanceof Error ? err.message : String(err),
-                tone: 'danger',
-            });
-        }
+        await runNoteExport(format, { title: note.title, content }, locale);
     };
     const exportMenuItems: MenuItem[] = [
         { id: 'md', label: t("workspace.export_markdown"), icon: <FileText size={13}/>, onSelect: () => void exportNote('md') },

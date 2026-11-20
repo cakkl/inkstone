@@ -1,10 +1,15 @@
 import { renderMarkdown } from './markdown/renderer'
+import { decodeDataValue } from './markdown/data-attr'
 import { api } from './api'
 import { extractAttachmentIds } from '@shared/markdown-utils'
 import { createZip } from '@shared/zip'
+import { useUi } from '../store/ui'
+import { t } from './i18n'
 
+// 尖括号是原笔记里的写法，导出路径已百分号编码，不需要包裹。
 const ATTACHMENT_LINK_RE =
-  /(?:https?:\/\/[^/\s<>"']+)?\/api\/files\/([0-9a-hjkmnp-tv-z]{26})(?=$|[\s>)\]"'?#])/g
+  /<((?:https?:\/\/[^/\s<>"']+)?\/api\/files\/([0-9a-hjkmnp-tv-z]{26}))>|((?:https?:\/\/[^/\s<>"']+)?\/api\/files\/([0-9a-hjkmnp-tv-z]{26}))(?=$|[\s>)\]"'?#])/g
+const EXPORT_PENDING_DELAY_MS = 120
 const UTF8_ENCODER = new TextEncoder()
 const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/apng': '.apng',
@@ -61,7 +66,10 @@ export async function exportNoteAsMarkdown(note: { title: string; content: strin
   const directory = `${name}.assets`
   const linkDirectory = `./${encodeAssetName(directory)}`
   const links = new Map(entries.map((entry) => [entry.id, `${linkDirectory}/${encodeAssetName(entry.filename)}`]))
-  const body = note.content.replace(ATTACHMENT_LINK_RE, (match, id: string) => links.get(id) ?? match)
+  const body = note.content.replace(ATTACHMENT_LINK_RE, (match, _wrapped: string, wrappedId: string, _bare: string, bareId: string) => {
+    const id = wrappedId ?? bareId;
+    return links.get(id) ?? match;
+  })
   const archive = createZip([
     { path: `${name}.md`, data: UTF8_ENCODER.encode(`${frontMatter(note.title)}${body}`) },
     ...entries.map((entry) => ({ path: `${directory}/${entry.filename}`, data: entry.data })),
@@ -131,17 +139,163 @@ function encodeAssetName(name: string): string {
   return name.replace(/[\s()<>#?%[\]]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)
 }
 
+export type NoteExportFormat = 'md' | 'html' | 'pdf'
+
+let exportInFlight = false
+
+/** 统一的导出入口：去重、进行中提示与失败提示都在这里，调用方只需传入格式。 */
+export async function exportNote(
+  format: NoteExportFormat,
+  note: { title: string; content: string },
+  locale: string,
+): Promise<void> {
+  if (exportInFlight) return
+  exportInFlight = true
+  const toast = useUi.getState().toast
+  const dismissToast = useUi.getState().dismissToast
+  let pendingToastId = ''
+  const pendingTimer = window.setTimeout(() => {
+    pendingToastId = toast({ title: t('workspace.export_preparing'), duration: 0 })
+  }, EXPORT_PENDING_DELAY_MS)
+  try {
+    if (format === 'html') {
+      await exportNoteAsHtml(note, locale)
+    }
+    else if (format === 'pdf') {
+      await exportNoteAsPdf(note, locale)
+    }
+    else {
+      const images = await exportNoteAsMarkdown(note)
+      if (images)
+        toast({ title: t('workspace.export_markdown_bundle', { value0: images }) })
+    }
+  }
+  catch (err) {
+    toast({
+      title: t('workspace.export_failed'),
+      description: err instanceof Error ? err.message : String(err),
+      tone: 'danger',
+    })
+  }
+  finally {
+    window.clearTimeout(pendingTimer)
+    if (pendingToastId) dismissToast(pendingToastId)
+    exportInFlight = false
+  }
+}
+
 export async function exportNoteAsHtml(note: { title: string; content: string }, language: string): Promise<void> {
-  const rendered = renderMarkdown(note.content)
-  const [body, css] = await Promise.all([inlinePrivateImages(rendered.html), localKatexCss()])
+  const [body, css] = await Promise.all([exportBody(note.content), localKatexCss()])
   downloadTextFile(`${safeFileName(note.title) || 'note'}.html`, htmlDocument(note.title, body, language, css), 'text/html;charset=utf-8')
 }
 
 export async function exportNoteAsPdf(note: { title: string; content: string }, language: string): Promise<void> {
-  const rendered = renderMarkdown(note.content)
-  const [body, css] = await Promise.all([inlinePrivateImages(rendered.html), localKatexCss()])
+  const [body, css] = await Promise.all([exportBody(note.content), localKatexCss()])
   const html = htmlDocument(note.title, body, language, css)
   await printHtml(html)
+}
+
+async function exportBody(content: string): Promise<string> {
+  const rendered = renderMarkdown(content)
+  const inlined = await inlinePrivateImages(rendered.html)
+  return prepareExportDom(inlined)
+}
+
+/** 导出的 HTML 里没有脚本，靠 enhance.ts 填充的元素会停在占位态，这里换成静态内容。 */
+async function prepareExportDom(html: string): Promise<string> {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  flattenTabs(doc)
+  unlinkReferences(doc)
+  replaceEmbeds(doc)
+  downgradeMermaid(doc)
+  for (const button of [...doc.querySelectorAll('[data-copy]')]) button.remove()
+  await renderMath(doc)
+  return doc.body.innerHTML
+}
+
+function flattenTabs(doc: Document): void {
+  for (const tabs of [...doc.querySelectorAll<HTMLElement>('.markdown-tabs')]) {
+    const titles = [...tabs.querySelectorAll<HTMLElement>('[data-tab-button]')].map((button) => button.textContent ?? '')
+    tabs.querySelector('.tab-list')?.remove()
+    for (const panel of [...tabs.querySelectorAll<HTMLElement>('[data-tab-panel]')]) {
+      panel.removeAttribute('hidden')
+      panel.removeAttribute('id')
+      panel.removeAttribute('role')
+      panel.removeAttribute('aria-labelledby')
+      const title = titles[Number(panel.dataset.tabPanel)]
+      if (title) {
+        const label = doc.createElement('p')
+        label.className = 'export-panel-title'
+        label.textContent = title
+        panel.before(label)
+      }
+    }
+  }
+}
+
+function unlinkReferences(doc: Document): void {
+  for (const anchor of [...doc.querySelectorAll<HTMLAnchorElement>('a.wikilink, a.block-reference')]) {
+    const span = doc.createElement('span')
+    span.className = anchor.className
+    span.textContent = anchor.textContent
+    anchor.replaceWith(span)
+  }
+}
+
+function replaceEmbeds(doc: Document): void {
+  for (const embed of [...doc.querySelectorAll<HTMLElement>('.note-embed')]) {
+    const target = decodeDataValue(embed.dataset.embedTarget)
+    const note = doc.createElement('p')
+    note.className = 'export-note-embed'
+    note.textContent = t('workspace.export_embed_note', { value0: target })
+    const wrapper = embed.closest('.note-embed-paragraph')
+    if (wrapper) wrapper.replaceWith(note)
+    else embed.replaceWith(note)
+  }
+}
+
+function downgradeMermaid(doc: Document): void {
+  for (const block of [...doc.querySelectorAll<HTMLElement>('.mermaid-block')]) {
+    const source = decodeDataValue(block.dataset.mermaid)
+    const pre = doc.createElement('pre')
+    pre.className = 'export-source'
+    const code = doc.createElement('code')
+    code.textContent = source
+    pre.append(code)
+    block.replaceWith(pre)
+  }
+}
+
+async function renderMath(doc: Document): Promise<void> {
+  const nodes = [...doc.querySelectorAll<HTMLElement>('[data-math]')]
+  if (!nodes.length) return
+  let katex: { renderToString: (source: string, options: Record<string, unknown>) => string } | null = null
+  try {
+    katex = (await import('./katex-loader')).default
+  }
+  catch {
+    katex = null
+  }
+  for (const node of nodes) {
+    const source = decodeDataValue(node.dataset.math)
+    const display = node.classList.contains('math-block')
+    delete node.dataset.math
+    if (!katex) {
+      showMathSource(node, source, display)
+      continue
+    }
+    try {
+      node.innerHTML = katex.renderToString(source, { displayMode: display, throwOnError: false })
+    }
+    catch {
+      showMathSource(node, source, display)
+    }
+  }
+}
+
+function showMathSource(node: HTMLElement, source: string, display: boolean): void {
+  node.classList.add('math-source')
+  node.textContent = display ? `$$\n${source}\n$$` : `$${source}$`
 }
 
 async function printHtml(html: string): Promise<void> {
@@ -237,7 +391,14 @@ h4 { font-size: 1.05em; }
 p { margin: 0.7em 0; }
 a { color: #2563eb; text-decoration: none; }
 a:hover { text-decoration: underline; }
-a.wikilink { color: #4b5563; text-decoration: none; border-bottom: 1px dashed #9ca3af; }
+.wikilink, .block-reference { color: #4b5563; text-decoration: none; border-bottom: 1px dashed #9ca3af; }
+.math-source { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.9em; color: #4b5563; background: #f3f4f6; border-radius: 4px; padding: 0.15em 0.4em; }
+div.math-source { display: block; white-space: pre-wrap; padding: 0.8em 1em; margin: 0.9em 0; }
+.export-source { background: #f3f4f6; color: #1f2328; border-radius: 8px; padding: 0.9em 1.1em; margin: 0.9em 0; overflow-x: auto; }
+.export-source code { background: transparent; padding: 0; font-size: 0.88em; }
+.export-note-embed { margin: 0.9em 0; padding: 0.5em 0.9em; border-left: 3px dashed #9ca3af; color: #4b5563; font-size: 0.95em; }
+.export-panel-title { margin: 1em 0 0.3em; font-size: 0.95em; font-weight: 600; color: #374151; }
+.math-block { display: block; margin: 0.9em 0; text-align: center; }
 strong { font-weight: 600; }
 del { color: #6b7280; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.88em; background: #f3f4f6; border-radius: 4px; padding: 0.15em 0.35em; }

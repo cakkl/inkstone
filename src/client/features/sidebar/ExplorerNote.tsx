@@ -1,13 +1,14 @@
 import { useRef, useState } from 'react';
-import { Archive, Columns2, FileText, FolderInput, MoreHorizontal, Star, Trash2 } from 'lucide-react';
+import { FileText, MoreHorizontal } from 'lucide-react';
 import type { Folder, NoteSummary } from '@shared/types';
 import { cn } from '../../lib/cn';
 import { t } from '../../lib/i18n';
 import { IconButton } from '../../components/primitives';
-import { Menu, useContextMenu, type MenuItem } from '../../components/overlay';
+import { Menu, useContextMenu } from '../../components/overlay';
 import { useNotes } from '../../store/notes';
 import { useUi } from '../../store/ui';
 import { FolderPicker } from '../folders/FolderPicker';
+import { noteMenuItems, useNoteMenuHandlers } from '../list/note-menu';
 
 export function groupExplorerNotes(notes: Record<string, NoteSummary>, folders: Folder[], locale: string): Map<string | null, NoteSummary[]> {
     const folderIds = new Set(folders.map((folder) => folder.id));
@@ -28,8 +29,6 @@ export function groupExplorerNotes(notes: Record<string, NoteSummary>, folders: 
 export function ExplorerNote({ note, depth, canOpenToSide }: { note: NoteSummary; depth: number; canOpenToSide: boolean }) {
     const active = useUi((s) => s.activeNoteId === note.id);
     const openNote = useNotes((s) => s.openNote);
-    const patchNote = useNotes((s) => s.patchNote);
-    const deleteNote = useNotes((s) => s.deleteNote);
     const folders = useNotes((s) => s.folders);
     const anchor = useRef<HTMLDivElement>(null);
     const contextMenu = useContextMenu();
@@ -39,13 +38,11 @@ export function ExplorerNote({ note, depth, canOpenToSide }: { note: NoteSummary
         useUi.getState().openExplorer(folders.some((folder) => folder.id === note.folderId) ? note.folderId : null);
         void openNote(note.id, side ? { pane: 'secondary' } : undefined);
     };
-    const items: MenuItem[] = [
-        ...(canOpenToSide ? [{ id: 'side', label: t('notes.open_to_side'), icon: <Columns2 size={13}/>, onSelect: () => open(true) }] : []),
-        { id: 'star', label: note.isStarred ? t('common.remove_from_favorites') : t('navigation.favorites'), icon: <Star size={13}/>, onSelect: () => void patchNote(note.id, { isStarred: !note.isStarred }) },
-        { id: 'move', label: t('notes.move_to_folder'), icon: <FolderInput size={13}/>, onSelect: () => setMoving(true) },
-        { id: 'archive', label: t('navigation.archive'), icon: <Archive size={13}/>, onSelect: () => void patchNote(note.id, { isArchived: true }) },
-        { id: 'delete', label: t('common.move_to_trash'), icon: <Trash2 size={13}/>, separatorBefore: true, tone: 'danger', onSelect: () => void deleteNote(note.id) },
-    ];
+    const { actions, purging } = useNoteMenuHandlers(note, {
+        onMove: () => setMoving(true),
+        ...(canOpenToSide ? { onOpenToSide: () => open(true) } : {}),
+    });
+    const items = noteMenuItems(note, { breakpoint: 'desktop', active, selected: false, purging, actions });
     return <div role="treeitem" aria-level={depth + 1} aria-selected={active} data-tree-note-id={note.id}>
         <div ref={anchor} draggable onDragStart={(event) => {
             event.dataTransfer.setData('application/x-inkstone-note', note.id);
@@ -60,6 +57,6 @@ export function ExplorerNote({ note, depth, canOpenToSide }: { note: NoteSummary
         </div>
         <Menu anchor={anchor} open={menuOpen} onClose={() => setMenuOpen(false)} items={items}/>
         {contextMenu.point && <Menu anchor={contextMenu.point} open onClose={contextMenu.close} items={items}/>}
-        <FolderPicker open={moving} title={t('notes.move_to_folder')} folders={folders} currentId={note.folderId} onSelect={(folderId) => void patchNote(note.id, { folderId })} onClose={() => setMoving(false)}/>
+        <FolderPicker open={moving} title={t('notes.move_to_folder')} folders={folders} currentId={note.folderId} onSelect={(folderId) => void useNotes.getState().patchNote(note.id, { folderId })} onClose={() => setMoving(false)}/>
     </div>;
 }

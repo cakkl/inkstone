@@ -1113,6 +1113,8 @@ export const EN_US_MESSAGES = {
     "workspace.export_html": "Export as HTML",
     "workspace.export_markdown": "Export as Markdown",
     "workspace.export_markdown_bundle": "Exported a ZIP with the note and {value0} attachment(s)",
+    "workspace.export_preparing": "Packing the file; the download starts when it is ready",
+    "workspace.export_embed_note": "Embedded note: {value0} (its content is not included in the export)",
     "workspace.export_pdf": "Export as PDF",
     "workspace.footnote": "Footnote",
     "workspace.heading_value0": "Heading {value0}",
