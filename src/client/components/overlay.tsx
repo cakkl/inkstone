@@ -284,6 +284,20 @@ export function Menu({ anchor, open, onClose, items, align = 'start', width = 20
     const anchorRef = 'current' in anchor ? anchor : null;
     const point = 'current' in anchor ? null : anchor;
     const menuWidth = Math.min(width, Math.max(0, innerWidth - 16));
+    const maxMenuWidth = Math.max(160, innerWidth - 16);
+    useLayoutEffect(() => {
+        if (!open)
+            return;
+        const element = menuRef.current;
+        if (!element)
+            return;
+        const rect = element.getBoundingClientRect();
+        const viewport = getVisibleViewport();
+        const margin = 8;
+        const clamped = Math.max(viewport.left + margin, Math.min(position.left, viewport.right - margin - rect.width));
+        if (Math.abs(clamped - position.left) > 0.5)
+            setPosition((current) => ({ ...current, left: clamped }));
+    }, [open, position.left, items]);
     useLayoutEffect(() => {
         if (!open)
             return;
@@ -373,7 +387,7 @@ export function Menu({ anchor, open, onClose, items, align = 'start', width = 20
     }, [open, items, cursor, onClose]);
     if (!open)
         return null;
-    return createPortal(<div ref={menuRef} role="menu" aria-label={label} tabIndex={-1} className="anim-pop fixed z-[260] max-h-[420px] overflow-y-auto rounded-[var(--r-lg)] border border-[var(--border-default)] bg-[var(--bg-overlay)] p-1 shadow-[var(--shadow-pop)] outline-none" style={{ top: position.top, left: position.left, width: menuWidth, transformOrigin: position.origin }}>
+    return createPortal(<div ref={menuRef} role="menu" aria-label={label} tabIndex={-1} className="anim-pop fixed z-[260] max-h-[420px] overflow-y-auto rounded-[var(--r-lg)] border border-[var(--border-default)] bg-[var(--bg-overlay)] p-1 shadow-[var(--shadow-pop)] outline-none" style={{ top: position.top, left: position.left, minWidth: menuWidth, maxWidth: maxMenuWidth, width: 'max-content', transformOrigin: position.origin }}>
       {items.map((item, index) => (<div key={item.id}>
           {item.separatorBefore && <div role="separator" className="my-1 h-px bg-[var(--border-subtle)]"/>}
           <button type="button" role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'} aria-checked={item.checked === undefined ? undefined : item.checked} tabIndex={index === cursor ? 0 : -1} data-menu-index={index} disabled={item.disabled} onMouseEnter={() => {

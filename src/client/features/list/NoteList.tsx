@@ -1,6 +1,6 @@
 import { APP_SHORTCUTS, NOTE_LIST_SHORTCUTS } from '../../lib/shortcuts';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, ArrowDownWideNarrow, CheckSquare2, Columns2, Copy, FileCode, FileDown, FileText, FolderInput, Link2, MoreHorizontal, Pin, PinOff, PanelLeft, Plus, RotateCcw, Search, Star, StarOff, Trash2, X, } from 'lucide-react';
+import { Archive, ArrowDownWideNarrow, Columns2, FolderInput, MoreHorizontal, Pin, PanelLeft, Plus, Search, Star, Trash2, X, } from 'lucide-react';
 import type { NoteSummary, SearchHit, SortKey, ViewKind } from '@shared/types';
 import { cn } from '../../lib/cn';
 import { groupLabel } from '../../lib/time';
@@ -9,7 +9,6 @@ import { api } from '../../lib/api';
 import { fuzzyFilter, splitByRanges } from '../../lib/fuzzy';
 import { useBreakpoint } from '../../lib/hooks';
 import { matches, prettyCombo } from '../../lib/hotkeys';
-import { exportNote as runNoteExport } from '../../lib/export-note';
 import { IconButton, Logo } from '../../components/primitives';
 import { Menu, Tooltip, confirm, useContextMenu, type MenuItem } from '../../components/overlay';
 import { Empty, NoteListSkeleton } from '../../components/feedback';
@@ -19,6 +18,7 @@ import { folderPathLabel } from '../../lib/folders';
 import { FolderPicker } from '../folders/FolderPicker';
 import { t, useLocale, type MessageKey } from "../../lib/i18n";
 import { MobileLibraryFilters } from '../shell/MobileLibraryFilters';
+import { noteMenuItems, useNoteMenuHandlers } from './note-menu';
 const VIEW_MESSAGE_KEYS: Record<ViewKind, MessageKey> = {
     all: 'navigation.all_notes',
     recent: 'navigation.recently_edited',
@@ -341,8 +341,6 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
     onRangeSelect: (noteId: string) => void;
 }) {
     const breakpoint = useBreakpoint();
-    const locale = useLocale();
-    const toast = useUi((s) => s.toast);
     const active = useUi((s) => s.activeNoteId === note.id);
     const openInSecondary = useUi((s) => s.workspaceSecondaryNoteId === note.id);
     const selectedIds = useUi((s) => s.selectedIds);
@@ -352,135 +350,17 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
     const openNote = useNotes((s) => s.openNote);
     const isDraft = useNotes((s) => s.drafts.has(note.id));
     const patchNote = useNotes((s) => s.patchNote);
-    const deleteNote = useNotes((s) => s.deleteNote);
-    const restoreNote = useNotes((s) => s.restoreNote);
-    const purgeNote = useNotes((s) => s.purgeNote);
-    const duplicateNote = useNotes((s) => s.duplicateNote);
     const folders = useNotes((s) => s.folders);
     const menu = useContextMenu();
     const menuButtonRef = useRef<HTMLButtonElement>(null);
     const [menuOpen, setMenuOpen] = useState(false);
     const [moveOpen, setMoveOpen] = useState(false);
-    const purgeRef = useRef(false);
-    const [purging, setPurging] = useState(false);
-    const inTrash = Boolean(note.deletedAt);
-    const purge = async () => {
-        if (purgeRef.current)
-            return;
-        purgeRef.current = true;
-        setPurging(true);
-        try {
-            const ok = await confirm({
-                title: t("notes.permanently_delete_this_note"),
-                description: t("notes.this_operation_cannot_be_undone"),
-                confirmLabel: t("notes.delete_permanently"),
-                tone: 'danger',
-            });
-            if (ok)
-                await purgeNote(note.id);
-        }
-        finally {
-            purgeRef.current = false;
-            setPurging(false);
-        }
-    };
-    const exportNote = async (format: 'md' | 'html' | 'pdf') => {
-        const state = useNotes.getState();
-        let content = state.contents[note.id];
-        if (content === undefined) {
-            await state.openNote(note.id);
-            content = useNotes.getState().contents[note.id];
-            if (content === undefined) {
-                toast({ title: t("common.export_failed"), tone: 'danger' });
-                return;
-            }
-        }
-        await runNoteExport(format, { title: note.title, content }, locale);
-    };
-    const copyText = async (value: string, successMessage: 'notes.title_copied' | 'notes.id_copied' | 'notes.direct_link_copied') => {
-        try {
-            await navigator.clipboard.writeText(value);
-            toast({ title: t(successMessage), tone: 'success' });
-        }
-        catch {
-            toast({ title: t('preview.could_not_copy'), tone: 'danger' });
-        }
-    };
-    const noteActions: MenuItem[] = inTrash
-        ? [
-            { id: 'restore', label: t("common.restore"), icon: <RotateCcw size={13}/>, separatorBefore: true, onSelect: () => void restoreNote(note.id) },
-            {
-                id: 'purge',
-                label: t("notes.delete_permanently"),
-                icon: <Trash2 size={13}/>,
-                tone: 'danger',
-                separatorBefore: true,
-                disabled: purging,
-                onSelect: () => void purge(),
-            },
-        ]
-        : [
-            ...(breakpoint === 'desktop' ? [{
-                id: 'open-side',
-                label: t("notes.open_to_side"),
-                icon: <Columns2 size={13}/>,
-                separatorBefore: true,
-                onSelect: () => void openNote(note.id, { pane: 'secondary' }),
-            } satisfies MenuItem] : []),
-            ...(breakpoint === 'mobile' ? [{
-                id: 'multi-select',
-                label: t("notes.add_to_selection"),
-                icon: <CheckSquare2 size={13}/>,
-                separatorBefore: true,
-                disabled: selectedIds.includes(note.id),
-                onSelect: () => toggleSelected(note.id, true),
-            } satisfies MenuItem] : []),
-            {
-                id: 'pin',
-                label: note.isPinned ? t("notes.unpin") : t("notes.pin"),
-                icon: note.isPinned ? <PinOff size={13}/> : <Pin size={13}/>,
-                separatorBefore: breakpoint !== 'desktop' && breakpoint !== 'mobile',
-                onSelect: () => void patchNote(note.id, { isPinned: !note.isPinned }),
-            },
-            {
-                id: 'star',
-                label: note.isStarred ? t("common.remove_from_favorites") : t("navigation.favorites"),
-                icon: note.isStarred ? <StarOff size={13}/> : <Star size={13}/>,
-                combo: active ? APP_SHORTCUTS.star : undefined,
-                onSelect: () => void patchNote(note.id, { isStarred: !note.isStarred }),
-            },
-            { id: 'duplicate', label: t("notes.create_a_copy"), icon: <Copy size={13}/>, onSelect: () => void duplicateNote(note.id) },
-            {
-                id: 'archive',
-                label: note.isArchived ? t("common.unarchive") : t("navigation.archive"),
-                icon: <Archive size={13}/>,
-                onSelect: () => void patchNote(note.id, { isArchived: !note.isArchived }),
-            },
-            {
-                id: 'move',
-                label: t("notes.move_to_folder"),
-                icon: <FolderInput size={13}/>,
-                separatorBefore: true,
-                onSelect: () => setMoveOpen(true),
-            },
-            { id: 'export-md', label: t("workspace.export_markdown"), icon: <FileText size={13}/>, separatorBefore: true, onSelect: () => void exportNote('md') },
-            { id: 'export-html', label: t("workspace.export_html"), icon: <FileCode size={13}/>, onSelect: () => void exportNote('html') },
-            { id: 'export-pdf', label: t("workspace.export_pdf"), icon: <FileDown size={13}/>, onSelect: () => void exportNote('pdf') },
-            {
-                id: 'delete',
-                label: t("common.move_to_trash"),
-                icon: <Trash2 size={13}/>,
-                tone: 'danger',
-                separatorBefore: true,
-                onSelect: () => void deleteNote(note.id),
-            },
-        ];
-    const items: MenuItem[] = [
-        { id: 'copy-title', label: t('notes.copy_title'), icon: <Copy size={13}/>, onSelect: () => void copyText(note.title || t('common.untitled_note'), 'notes.title_copied') },
-        { id: 'copy-id', label: t('notes.copy_id'), icon: <Copy size={13}/>, onSelect: () => void copyText(note.id, 'notes.id_copied') },
-        { id: 'copy-direct-link', label: t('notes.copy_direct_link'), icon: <Link2 size={13}/>, onSelect: () => void copyText(new URL(`/n/${encodeURIComponent(note.id)}`, window.location.origin).href, 'notes.direct_link_copied') },
-        ...noteActions,
-    ];
+    const { actions, purging } = useNoteMenuHandlers(note, {
+        onMove: () => setMoveOpen(true),
+        onOpenToSide: () => void openNote(note.id, { pane: 'secondary' }),
+        onMultiSelect: () => toggleSelected(note.id, true),
+    });
+    const items = noteMenuItems(note, { breakpoint, active, selected, purging, actions });
     const titleParts = splitByRanges(note.title || t("common.untitled_note"), highlight);
     return (<>
       <div id={`note-option-${note.id}`} role="option" aria-selected={active || selected} aria-posinset={position} aria-setsize={total} tabIndex={-1} data-note-id={note.id} draggable style={{ contentVisibility: 'auto', containIntrinsicSize: density === 'compact' ? 'auto 42px' : 'auto 72px' }} onDragStart={(e) => {
