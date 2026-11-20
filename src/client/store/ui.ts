@@ -26,6 +26,7 @@ export interface ToastItem {
   tone: 'default' | 'success' | 'danger' | 'warning'
   action?: { label: string; run: () => void }
   duration: number
+  leaving?: boolean
 }
 
 interface UiState {
@@ -489,7 +490,11 @@ export const useUi = create<UiState>((set, get) => ({
     return id
   },
 
-  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  dismissToast: (id) => {
+    if (!get().toasts.some((item) => item.id === id && !item.leaving)) return
+    set((s) => ({ toasts: s.toasts.map((item) => item.id === id ? { ...item, leaving: true } : item) }))
+    window.setTimeout(() => set((s) => ({ toasts: s.toasts.filter((item) => item.id !== id) })), 200)
+  },
 
   applyAppearance: (patch) => {
     const current = get()

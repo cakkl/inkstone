@@ -9,7 +9,7 @@ import { api } from '../../lib/api';
 import { fuzzyFilter, splitByRanges } from '../../lib/fuzzy';
 import { useBreakpoint } from '../../lib/hooks';
 import { matches, prettyCombo } from '../../lib/hotkeys';
-import { exportNoteAsHtml, exportNoteAsMarkdown, exportNoteAsPdf } from '../../lib/export-note';
+import { exportNote as runNoteExport } from '../../lib/export-note';
 import { IconButton, Logo } from '../../components/primitives';
 import { Menu, Tooltip, confirm, useContextMenu, type MenuItem } from '../../components/overlay';
 import { Empty, NoteListSkeleton } from '../../components/feedback';
@@ -395,27 +395,7 @@ const NoteRow = memo(function NoteRow({ note, highlight, density, tagColors, pos
                 return;
             }
         }
-        const payload = { title: note.title, content };
-        try {
-            if (format === 'md') {
-                const images = await exportNoteAsMarkdown(payload);
-                if (images)
-                    toast({ title: t("workspace.export_markdown_bundle", { value0: images }) });
-            }
-            else if (format === 'html') {
-                await exportNoteAsHtml(payload, locale);
-            }
-            else {
-                await exportNoteAsPdf(payload, locale);
-            }
-        }
-        catch (err) {
-            toast({
-                title: t("common.export_failed"),
-                description: err instanceof Error ? err.message : String(err),
-                tone: 'danger',
-            });
-        }
+        await runNoteExport(format, { title: note.title, content }, locale);
     };
     const copyText = async (value: string, successMessage: 'notes.title_copied' | 'notes.id_copied' | 'notes.direct_link_copied') => {
         try {

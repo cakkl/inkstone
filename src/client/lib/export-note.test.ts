@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readZip } from '@shared/zip'
-import { exportNoteAsMarkdown } from './export-note'
+import { initI18n } from './i18n'
+import { exportNoteAsHtml, exportNoteAsMarkdown } from './export-note'
 
 const IMAGE_ID = '01m1r8923zajxnw9y0dhs6sy8j'
 
@@ -90,5 +91,90 @@ describe('exportNoteAsMarkdown', () => {
     restore()
     expect(count).toBe(0)
     expect(await blobs[0]!.text()).toContain(`/api/files/${IMAGE_ID}`)
+  })
+
+  it('drops the angle brackets the note carried around the attachment link', async () => {    const { blobs, restore } = captureDownload()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path === '/api/files')
+        return new Response(JSON.stringify({ files: [{ id: IMAGE_ID, filename: 'sample.png' }] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } })
+    }))
+    const count = await exportNoteAsMarkdown({
+      title: 'Sample note',
+      content: `![image](</api/files/${IMAGE_ID}>)`,
+    })
+    restore()
+
+    expect(count).toBe(1)
+    const entries = await readZip(new Uint8Array(await blobs[0]!.arrayBuffer()))
+    const markdown = new TextDecoder().decode(entries.find((entry) => entry.path === 'Sample note.md')!.data)
+    expect(markdown).toContain('![image](./Sample%20note.assets/sample.png)')
+    expect(markdown).not.toContain('<>')
+  })
+
+  it('keeps an unresolved attachment untouched, brackets included', async () => {
+    const { blobs, restore } = captureDownload()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 503 })))
+    const content = `![image](</api/files/${IMAGE_ID}>)`
+    const count = await exportNoteAsMarkdown({ title: 'Trip', content })
+    restore()
+
+    expect(count).toBe(0)
+    expect(await blobs[0]!.text()).toContain(`![image](</api/files/${IMAGE_ID}>)`)
+  })
+})
+
+describe('exportNoteAsHtml', () => {
+  async function renderExport(content: string): Promise<string> {
+    await initI18n()
+    const { blobs, restore } = captureDownload()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 503 })))
+    await exportNoteAsHtml({ title: 'Sample note', content }, 'en-US')
+    restore()
+    return blobs[0]!.text()
+  }
+
+  it('replaces placeholders that never resolve without a script', async () => {
+    const html = await renderExport([
+      '::: tabs',
+      '@tab First',
+      'first panel body',
+      '@tab Second',
+      'second panel body',
+      ':::',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```',
+      '',
+      '![[Another note]]',
+      '',
+      'See [[Another note]] and ((block-id)).',
+    ].join('\n'))
+
+    expect(html).toContain('first panel body')
+    expect(html).toContain('second panel body')
+    expect(html).toContain('A --&gt; B')
+    expect(html).toContain('Another note')
+    expect(html).not.toContain('mermaid-block')
+    expect(html).not.toContain('data-embed-target')
+    expect(html).not.toContain('aria-busy')
+    expect(html).not.toContain('data-tab-button')
+    expect(html).not.toContain('a class="wikilink"')
+    expect(html).not.toContain('a class="block-reference"')
+    expect(html).not.toContain('data-copy')
+  })
+
+  it('resolves math instead of leaving the data attribute behind', async () => {
+    const html = await renderExport('Inline $a+b$ here.\n\n$$\nc+d\n$$\n')
+
+    expect(html).not.toContain('data-math')
+    expect(html).toContain('math-inline')
+    expect(html).toContain('math-block')
+    expect(html).toMatch(/math-inline[^>]*>(?!<\/span>)\S/)
   })
 })
