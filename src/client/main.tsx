@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles/inter.css'
 import './styles/app.css'
+import './styles/summary.css'
 import { LOCALE_STORAGE_KEY, UI_STORAGE_KEY } from './lib/runtime'
 import { installViewportSizing } from './lib/viewport'
 

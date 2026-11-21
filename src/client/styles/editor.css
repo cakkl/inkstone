@@ -44,6 +44,11 @@
   padding: 0 16px;
 }
 
+/* Inline widgets (e.g. the summary block) match the prose line insets. */
+.ink-editor .ink-top-slot {
+  padding: 0 16px;
+}
+
 
 .ink-editor .cm-cursor,
 .ink-editor .cm-dropCursor {

@@ -2,6 +2,7 @@ import { CLIENT_HEADER } from '@shared/constants'
 import type { MarkdownBackupManifest } from '@shared/backup-format'
 import type {
   AiNoteSummaryResponse,
+  AiSummaryNoteMode,
   AiSummaryVersion,
   AppLocale,
   Attachment,
@@ -374,6 +375,11 @@ export const api = {
       request<{ versions: AiSummaryVersion[] }>(`/api/notes/${id}/summary/versions`, { signal }),
     restoreSummaryVersion: (id: string, versionId: string) =>
       request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/versions/${versionId}/restore`, { method: 'POST' }),
+    setSummarySettings: (
+      id: string,
+      patch: { summaryEnabled?: boolean | null; aiMode?: AiSummaryNoteMode; autoGenerate?: boolean | null },
+    ) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/settings`, { method: 'PUT', body: patch }),
   },
 
   folders: {
@@ -440,12 +446,17 @@ export const api = {
     runs: () => request<{ runs: BackupRun[] }>('/api/backup/runs'),
   },
 
-  settings: {
-    get: () => request<UserSettings>('/api/settings'),
+  settings: {    get: () => request<UserSettings>('/api/settings'),
     save: (body: Partial<UserSettings>) =>
       request<UserSettings>('/api/settings', { method: 'PUT', body }).then((settings) => {
         publishBroadcast({ type: 'settings-changed', clientId: CLIENT_ID })
         return settings
+      }),
+    aiSummary: () => request<{ enabled: boolean; allowAutoGenerate: boolean }>('/api/settings/ai-summary'),
+    updateAiSummary: (body: { enabled?: boolean; allowAutoGenerate?: boolean }) =>
+      request<{ enabled: boolean; allowAutoGenerate: boolean }>('/api/settings/ai-summary', {
+        method: 'PUT',
+        body,
       }),
     stats: () => request<Record<string, number>>('/api/settings/stats'),
   },

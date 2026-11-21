@@ -1,0 +1,30 @@
+/* 生成中的扫光高亮：纯装饰不承载信息，reduced-motion 由全局规则压到 0.01ms。 */
+.summary-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--text-quaternary) 0%,
+    var(--text-primary) 45%,
+    var(--text-quaternary) 90%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: summary-shimmer 1.4s linear infinite;
+}
+
+@keyframes summary-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* 摘要行与正文同一度量：ch 取决于字号，所以这里跟随正文字号与字体。 */
+.summary-measure {
+  max-width: var(--prose-width, 72ch);
+  font-family: var(--font-ui);
+  font-size: var(--prose-size, 16px);
+}

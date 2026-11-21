@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type RefObject,
 } from 'react'
 import { cn } from '../../lib/cn'
@@ -40,6 +41,10 @@ export interface PreviewProps {
   onRendered?: () => void
   onInitialRender?: (scroller: HTMLDivElement) => void
   onScroll?: (scroller: HTMLDivElement) => void
+  /** Fired on wheel/touch input, i.e. the reader actually scrolling. */
+  onUserScroll?: () => void
+  /** Rendered above the prose inside the scroll container, so it scrolls away with the note. */
+  header?: ReactNode
   className?: string
 }
 
@@ -52,11 +57,34 @@ export const Preview = memo(function Preview({
   onRendered,
   onInitialRender,
   onScroll,
+  onUserScroll,
+  header,
   className,
 }: PreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const headerRef = useRef<HTMLDivElement>(null)
   const internalScrollerRef = useRef<HTMLDivElement>(null)
   const scrollerRef = externalScrollerRef ?? internalScrollerRef
+  const hasHeader = Boolean(header)
+  const [proseWidth, setProseWidth] = useState<number | null>(null)
+  // ch-based max-width depends on font size, so mirror the measured prose width instead.
+  useEffect(() => {
+    const prose = hostRef.current
+    if (!prose) return
+    const sync = () => setProseWidth(prose.getBoundingClientRect().width)
+    sync()
+    const observer = new ResizeObserver(sync)
+    observer.observe(prose)
+    return () => observer.disconnect()
+  }, [])
+  // Header height shifts every anchor, so remeasure whenever it changes.
+  useEffect(() => {
+    const element = headerRef.current
+    if (!element) return
+    const observer = new ResizeObserver(() => onRendered?.())
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [hasHeader, onRendered])
   const settings = useSession((s) => s.settings)
   const locale = useLocale()
   const setLightbox = useUi((s) => s.setLightbox)
@@ -389,7 +417,19 @@ export const Preview = memo(function Preview({
       className={cn('h-full overflow-y-auto overscroll-contain px-4 py-3', className)}
       data-preview-scroller
       onScroll={(event) => onScroll?.(event.currentTarget)}
+      onWheel={onUserScroll}
+      onTouchMove={onUserScroll}
     >
+      {header ? (
+        <div
+          ref={headerRef}
+          className="mx-auto mb-4"
+          style={proseWidth === null ? undefined : { width: proseWidth }}
+          data-preview-header
+        >
+          {header}
+        </div>
+      ) : null}
       <div
         ref={hostRef}
         onClick={onClick}

@@ -563,16 +563,36 @@ export function Drawer({ open, onClose, side = 'right', width = 380, children, t
 }) {
     const panelRef = useRef<HTMLElement>(null);
     const titleId = useId();
+    // 关闭时先播滑出再卸载，否则抽屉会瞬间消失。
+    const [rendered, setRendered] = useState(open);
+    const [closing, setClosing] = useState(false);
+    useEffect(() => {
+        if (open) {
+            setRendered(true);
+            setClosing(false);
+            return;
+        }
+        if (!rendered)
+            return;
+        setClosing(true);
+        const timer = window.setTimeout(() => {
+            setRendered(false);
+            setClosing(false);
+        }, 200);
+        return () => window.clearTimeout(timer);
+    }, [open, rendered]);
     useEscape(open, onClose);
     useLockScroll(open);
     useDialogFocus(open, panelRef);
-    if (!open)
+    if (!rendered)
         return null;
     return createPortal(<div className="app-viewport-fixed fixed" style={{ zIndex }}>
-      <div className="anim-fade absolute inset-0 bg-[var(--scrim)]" onClick={onClose} aria-hidden="true"/>
+      <div className={cn('absolute inset-0 bg-[var(--scrim)]', closing ? 'opacity-0 transition-opacity duration-[var(--dur-fast)]' : 'anim-fade')} onClick={onClose} aria-hidden="true"/>
       <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined} aria-label={title ? undefined : t("overlay.side_panel")} tabIndex={-1} className={cn('absolute top-0 bottom-0 flex flex-col border-[var(--border-default)] bg-[var(--bg-surface)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-[var(--shadow-modal)] outline-none md:py-0', side === 'right' ? 'right-0 border-l' : 'left-0 border-r')} style={{
             width: Math.min(width, window.innerWidth < 768 ? window.innerWidth : window.innerWidth - 32),
-            animation: `ink-slide-in-${side} var(--dur-slow) var(--ease-out) both`,
+            animation: closing
+                ? `ink-slide-out-${side} var(--dur-base) var(--ease-out) both`
+                : `ink-slide-in-${side} var(--dur-slow) var(--ease-out) both`,
         }}>
         {title && (<header className="flex h-11 shrink-0 items-center justify-between border-b border-[var(--border-subtle)] px-3">
             <span id={titleId} className="text-[13px] font-semibold">{title}</span>

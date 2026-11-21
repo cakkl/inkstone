@@ -39,6 +39,7 @@ import {
   newDemoId,
   refreshNote,
   summarize,
+  type DemoSampleSummary,
   type DemoState,
 } from './state'
 
@@ -280,6 +281,93 @@ export function createDemoBackend(): DemoBackend {
     purgeNote(state, id)
     return c.json({ ok: true as const, cursor: state.cursor })
   })
+  app.get('/api/settings/ai-summary', (c) =>
+    c.json({ enabled: true, allowAutoGenerate: false }),
+  )
+  app.put('/api/settings/ai-summary', async (c) => {
+    await jsonBody(c.req.raw)
+    return c.json({ enabled: true, allowAutoGenerate: false })
+  })
+
+  app.get('/api/notes/:id/summary', (c) => c.json(demoSummaryResponse(state, c.req.param('id'))))
+
+  app.put('/api/notes/:id/summary/settings', async (c) => {
+    const id = c.req.param('id')
+    const body = await jsonBody(c.req.raw)
+    const current = state.summarySettings.get(id) ?? { summaryEnabled: null, aiMode: 'inherit' as const, autoGenerate: null }
+    const next = {
+      summaryEnabled: 'summaryEnabled' in body ? (body.summaryEnabled as boolean | null) : current.summaryEnabled,
+      aiMode: (body.aiMode as 'inherit' | 'enabled' | 'disabled' | undefined) ?? current.aiMode,
+      autoGenerate: 'autoGenerate' in body ? (body.autoGenerate as boolean | null) : current.autoGenerate,
+    }
+    state.summarySettings.set(id, next)
+    // 关闭摘要 = 这篇不要了；关闭 AI = 只删 AI 写的。
+    if (next.summaryEnabled === false) {
+      state.summaries.delete(id)
+      state.summaryDrafts.delete(id)
+    } else if (next.aiMode === 'disabled') {
+      state.summaryDrafts.delete(id)
+      if (state.summaries.get(id)?.origin === 'ai') state.summaries.delete(id)
+    }
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.post('/api/notes/:id/summary', (c) => {
+    const id = c.req.param('id')
+    const note = state.notes.get(id)
+    if (!note) return apiError(404, 'not_found', 'Note not found')
+    // 模拟 AI：直接截取正文开头，便于演示生成流程（不含额外文案）。
+    const snippet = note.content.replace(/\s+/g, ' ').trim().slice(0, 120)
+    const generated: DemoSampleSummary = {
+      text: snippet + (note.content.length > 120 ? '…' : ''),
+      origin: 'ai',
+      language: 'zh-CN',
+      updatedAt: Date.now(),
+    }
+    // 与真实后端一致：手写摘要不被覆盖，生成结果先存成待确认草稿。
+    if (state.summaries.get(id)?.origin === 'user') state.summaryDrafts.set(id, generated)
+    else state.summaries.set(id, generated)
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.post('/api/notes/:id/summary/draft/accept', (c) => {
+    const id = c.req.param('id')
+    const pending = state.summaryDrafts.get(id)
+    if (pending) {
+      state.summaries.set(id, pending)
+      state.summaryDrafts.delete(id)
+    }
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.delete('/api/notes/:id/summary/draft', (c) => {
+    const id = c.req.param('id')
+    state.summaryDrafts.delete(id)
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.patch('/api/notes/:id/summary', async (c) => {
+    const id = c.req.param('id')
+    const body = await jsonBody(c.req.raw)
+    if (typeof body.text !== 'string' || !body.text.trim()) {
+      return apiError(400, 'bad_request', 'Summary text cannot be empty')
+    }
+    state.summaries.set(id, {
+      text: body.text.trim(),
+      origin: 'user',
+      language: 'zh-CN',
+      updatedAt: Date.now(),
+    })
+    state.summaryDrafts.delete(id)
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.delete('/api/notes/:id/summary', (c) => {
+    state.summaries.delete(c.req.param('id'))
+    state.summaryDrafts.delete(c.req.param('id'))
+    return c.json({ ok: true })
+  })
+
   app.get('/api/notes/:id', (c) => {
     const note = state.notes.get(c.req.param('id'))
     return note ? c.json(note) : apiError(404, 'not_found', 'Note not found')
@@ -985,6 +1073,8 @@ function siteInfo(state: DemoState) {
     attachmentStorage: null,
     realtimeEnabled: false,
     version: APP_VERSION,
+    // 演示环境用本地模拟回复，开关保持开启以便测试摘要流程。
+    aiSummary: { enabled: true, allowAutoGenerate: false },
   } as const
 }
 
@@ -1530,4 +1620,44 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
   const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
   return [...digest].map((value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+/** 演示环境的摘要响应：策略固定为「摘要跟随内容、AI 可用、自动关」。 */
+function demoSummaryResponse(state: DemoState, noteId: string) {
+  const note = state.notes.get(noteId)
+  const flags = state.summarySettings.get(noteId) ?? { summaryEnabled: null, aiMode: 'inherit' as const, autoGenerate: null }
+  const sample = state.summaries.get(noteId)
+  const pending = state.summaryDrafts.get(noteId)
+  const canGenerate = flags.aiMode !== 'disabled'
+  const autoEligible = canGenerate && flags.autoGenerate === true
+  const visible = flags.summaryEnabled ?? (Boolean(sample) || autoEligible)
+  return {
+    summary: sample
+      ? {
+          noteId,
+          text: sample.text,
+          origin: sample.origin,
+          status: 'current' as const,
+          language: sample.language,
+          model: sample.origin === 'ai' ? 'demo-model' : null,
+          generatedAt: sample.updatedAt,
+          updatedAt: sample.updatedAt,
+        }
+      : null,
+    draft: pending
+      ? {
+          noteId,
+          text: pending.text,
+          language: pending.language,
+          createdAt: pending.updatedAt,
+        }
+      : null,
+    minimumCharacters: 100,
+    characterCount: [...(note?.content ?? '')].filter((ch) => !/\s/.test(ch)).length,
+    remainingNeurons: 10_000,
+    visible,
+    canGenerate,
+    autoEligible,
+    settings: flags,
+  }
 }

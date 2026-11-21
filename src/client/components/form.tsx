@@ -229,7 +229,7 @@ export function Segmented<T extends string>({
               move(index, event.key)
             }}
             className={cn(
-              'relative z-10 inline-flex items-center justify-center gap-1.5 rounded-[var(--r-sm)] font-medium',
+              'relative z-10 inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[var(--r-sm)] font-medium',
               'transition-[color,background-color] duration-[var(--dur-fast)] ease-[var(--ease-out)]',
               'disabled:pointer-events-none disabled:opacity-45',
               size === 'sm' ? 'h-8 px-2.5 text-[11.5px] md:h-[22px] md:px-2' : 'h-9 px-3 text-[12.5px] md:h-[26px] md:px-2.5',
