@@ -44,7 +44,7 @@ beforeEach(async () => {
     },
   })
   useNotes.setState({ notes: { [note.id]: note }, contents: { [note.id]: '# Source\n\n**Markdown**' }, folders: [], tags: [] })
-  useUi.setState({ activeNoteId: note.id, mobilePane: 'editor', outlineOpen: false, backlinksOpen: false })
+  useUi.setState({ activeNoteId: note.id, mobilePane: 'note', noteView: 'edit', outlineOpen: false, backlinksOpen: false })
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -105,7 +105,7 @@ describe('workspace live rendering toggle', () => {
   it.each([false, true])('allows explicit reading with rendering disabled (mobile: %s)', async (isMobile) => {
     mobile = isMobile
     useSession.setState({ settings: mergeSettings({ editor: { livePreview: false }, preview: { layout: 'preview' } }) })
-    useUi.setState({ mobilePane: 'preview' })
+    useUi.setState({ mobilePane: 'note', noteView: 'read' })
     await act(() => root.render(createElement(Workspace)))
     expect(container.querySelector('[role="switch"]')).toBeNull()
     expect(container.querySelector('[data-test-preview]')).not.toBeNull()

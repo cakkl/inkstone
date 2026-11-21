@@ -18,6 +18,7 @@ import { folderPathLabel } from '../../lib/folders';
 import { FolderPicker } from '../folders/FolderPicker';
 import { t, useLocale, type MessageKey } from "../../lib/i18n";
 import { MobileLibraryFilters } from '../shell/MobileLibraryFilters';
+import { SaveIndicator } from '../shell/SaveIndicator';
 import { noteMenuItems, useNoteMenuHandlers } from './note-menu';
 const VIEW_MESSAGE_KEYS: Record<ViewKind, MessageKey> = {
     all: 'navigation.all_notes',
@@ -243,7 +244,9 @@ export function NoteList() {
     ];
     return (<section className={cn('relative flex h-full min-h-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-base)]', breakpoint === 'mobile' && 'mobile-note-list')}>
       <header className="shrink-0 px-3 pt-3 pb-2">
-        {breakpoint === 'mobile' && <div className="mobile-library-brand"><Logo size={22}/><span>{t('common.product_name')}</span></div>}
+        {breakpoint === 'mobile' && <div className="mobile-library-brand"><Logo size={22}/><span>{t('common.product_name')}</span>
+            <span className="ml-auto flex min-w-0 items-center text-[var(--text-tertiary)]"><SaveIndicator showLabel /></span>
+          </div>}
         {breakpoint !== 'mobile' && <div className="mb-2.5 flex items-center justify-between gap-2">
           <div className="min-w-0">
             <h2 className="truncate text-[14.5px] font-semibold tracking-[-0.016em] text-[var(--text-primary)]">{title}</h2>

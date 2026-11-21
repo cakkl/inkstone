@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 interface BackLayer {
   key: string
   token: string
-  handler: () => void
+  handler: (fromGesture: boolean) => void
 }
 
 const TOKEN_FIELD = 'inkstoneBack'
@@ -24,11 +24,13 @@ function currentToken(): string | null {
 }
 
 function onPopState(event: PopStateEvent): void {
+  // backPending 为真说明是代码自己调的 history.back()；否则来自系统返回手势。
+  const fromGesture = !backPending
   backPending = false
   const target = readToken(event.state)
   let left: BackLayer | undefined
   while (layers.length && layers[layers.length - 1]!.token !== target) left = layers.pop()
-  left?.handler()
+  left?.handler(fromGesture)
 }
 
 function listen(): void {
@@ -37,7 +39,7 @@ function listen(): void {
   window.addEventListener('popstate', onPopState)
 }
 
-export function pushBackLayer(key: string, handler: () => void): void {
+export function pushBackLayer(key: string, handler: (fromGesture: boolean) => void): void {
   listen()
   const existing = layers.find((layer) => layer.key === key)
   if (existing) {
@@ -74,7 +76,7 @@ export function requestBack(): boolean {
     return true
   }
   layers.pop()
-  top.handler()
+  top.handler(false)
   return true
 }
 
@@ -86,7 +88,7 @@ export function resetBackStack(): void {
   }
 }
 
-export function useBackLayer(active: boolean, key: string, handler: () => void): void {
+export function useBackLayer(active: boolean, key: string, handler: (fromGesture: boolean) => void): void {
   const handlerRef = useRef(handler)
   useEffect(() => {
     handlerRef.current = handler
@@ -96,7 +98,7 @@ export function useBackLayer(active: boolean, key: string, handler: () => void):
       removeBackLayer(key)
       return
     }
-    pushBackLayer(key, () => handlerRef.current())
+    pushBackLayer(key, (fromGesture) => handlerRef.current(fromGesture))
     return () => removeBackLayer(key)
   }, [active, key])
 }

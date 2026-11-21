@@ -727,7 +727,8 @@ export const useNotes = create<NotesState>((set, get) => ({
         adoptNote(optimistic, set, get);
         if (input?.open !== false) {
             useUi.getState().setActiveNote(id);
-            useUi.getState().setMobilePane('editor');
+            useUi.getState().setMobilePane('note');
+            useUi.getState().setNoteView('edit');
         }
         if (!title && !content.trim()) {
             markDraft(id, set, get);
@@ -3524,6 +3525,7 @@ function captureWorkspaceState() {
         selectedIds: ui.selectedIds,
         recentNoteIds: ui.recentNoteIds,
         mobilePane: ui.mobilePane,
+        noteView: ui.noteView,
     };
 }
 
@@ -3576,13 +3578,20 @@ function mountedNoteIds(ui: WorkspaceNoteIds): Set<string> {
 }
 
 let visibleNoteIds = mountedNoteIds(useUi.getState());
+let previousMobilePane = useUi.getState().mobilePane;
 
 useUi.subscribe((state) => {
     const next = mountedNoteIds(state);
     const previous = visibleNoteIds;
     visibleNoteIds = next;
-    for (const id of previous) {
-        if (next.has(id))
+    // 手机上退回列表/我的也等于离开当前笔记：activeNoteId 会保留，得单独算一次。
+    const leftNotePane = previousMobilePane === 'note' && state.mobilePane !== 'note';
+    previousMobilePane = state.mobilePane;
+    const leaving = leftNotePane && state.activeNoteId && !next.has(state.activeNoteId)
+        ? new Set([...previous, state.activeNoteId])
+        : previous;
+    for (const id of leaving) {
+        if (next.has(id) && !(leftNotePane && id === state.activeNoteId))
             continue;
         if (!isBlankDraft(useNotes.getState(), id))
             continue;

@@ -170,7 +170,8 @@ describe('explorer and collection navigation', () => {
         useUi.getState().setWorkspaceNote('primary', note.id, true, false);
         expect(useUi.getState().mobilePane).toBe('account');
         useUi.getState().setActiveNote(note.id);
-        expect(useUi.getState().mobilePane).toBe('preview');
+        expect(useUi.getState().mobilePane).toBe('note');
+        expect(useUi.getState().noteView).toBe('read');
     });
 });
 
@@ -195,7 +196,7 @@ describe('mobile navigation sheets', () => {
         expect(document.querySelector('[role="dialog"]')).toBeTruthy();
         await click(sheet.querySelector<HTMLButtonElement>('[data-tree-note-open]')!);
         expect(useUi.getState().activeNoteId).toBe(note.id);
-        expect(useUi.getState().mobilePane).toBe('preview');
+        expect(useUi.getState().mobilePane).toBe('note');
         expect(document.querySelector('[role="dialog"]')).toBeNull();
     });
 

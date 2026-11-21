@@ -7,7 +7,7 @@ import { useUi } from '../../store/ui';
 import { t } from "../../lib/i18n";
 
 
-export function SaveIndicator() {
+export function SaveIndicator({ onlyWhenPending = false, showLabel = false }: { onlyWhenPending?: boolean; showLabel?: boolean } = {}) {
     const status = useNotes((s) => s.saveStatus);
     const lastSavedAt = useNotes((s) => s.lastSavedAt);
     const online = useNotes((s) => s.online);
@@ -19,11 +19,26 @@ export function SaveIndicator() {
     const dirty = status === 'dirty';
     const synced = status === 'synced' || status === 'idle';
     const savedAgo = useRelativeTime(lastSavedAt, !offline && !saving && !dirty);
+    // 展开式列表页不需要常驻一个绿勾；只在有可报告的状态时占位。
+    if (onlyWhenPending && !offline && !saving && !dirty && !pending && !draft)
+        return null;
+    const shortLabel = draft
+        ? t("notes.draft")
+        : offline
+            ? pending
+                ? t("shell.offline_value0_changes_pending", { value0: pending })
+                : t("shell.offline")
+            : saving
+                ? t("shell.saving")
+                : dirty
+                    ? t("shell.unsaved_changes")
+                    : t("shell.synced");
+    const text = showLabel ? <span aria-hidden="true" className="truncate text-[11.5px]">{shortLabel}</span> : null;
     if (draft) {
         return (<Tooltip label={t("notes.draft_hint")} side="bottom">
         <span role="img" aria-label={t("notes.draft")} className="flex h-6 items-center gap-1.5 rounded-[var(--r-sm)] px-1.5 text-[11px] text-[var(--text-tertiary)]">
           <FileText size={13}/>
-          <span aria-hidden="true" className="hidden md:inline">{t("notes.draft")}</span>
+          {showLabel ? text : <span aria-hidden="true" className="hidden md:inline">{t("notes.draft")}</span>}
         </span>
       </Tooltip>);
     }
@@ -42,12 +57,12 @@ export function SaveIndicator() {
         return (<Tooltip label={label} side="bottom">
         <span role="img" aria-label={label} className="flex h-6 items-center gap-1.5 rounded-[var(--r-sm)] px-1.5 text-[11px] text-[var(--warning)]">
           <CloudOff size={13}/>
-          <span aria-hidden="true" className="hidden md:inline">{t("shell.offline")}</span>
+          {showLabel ? text : <span aria-hidden="true" className="hidden md:inline">{t("shell.offline")}</span>}
         </span>
       </Tooltip>);
     }
     return (<Tooltip label={label} side="bottom">
-      <span role="img" aria-label={label} className="flex size-7 items-center justify-center">
+      <span role="img" aria-label={label} className={cn('flex size-7 items-center justify-center', showLabel && 'w-auto gap-1.5 px-1')}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           { }
           <circle cx="8" cy="8" r="5.4" stroke="currentColor" strokeWidth="1.6" className={cn('transition-[opacity,color] duration-[var(--dur-base)]', saving
@@ -65,6 +80,7 @@ export function SaveIndicator() {
             strokeDashoffset: synced ? 0 : 1,
         }}/>
         </svg>
+        {text}
       </span>
     </Tooltip>);
 }

@@ -140,13 +140,10 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         : !online ? t("common.offline_unavailable") : null;
     const serverOnlyDisabled = serverOnlyReason !== null;
     const paneActive = !grouped || pane === 'active' || activeWorkspacePane === pane;
-    const mobilePane = useUi((s) => s.mobilePane);
-    const notePaneMode = useRef<'live' | 'preview'>(mobilePane === 'preview' ? 'preview' : 'live');
-    if (mobilePane === 'preview')
-        notePaneMode.current = 'preview';
-    else if (mobilePane === 'editor')
-        notePaneMode.current = 'live';
-    const layout = isMobile ? notePaneMode.current : grouped && pane !== 'active'
+    const noteView = useUi((s) => s.noteView);
+    const setNoteView = useUi((s) => s.setNoteView);
+    const readingMobile = isMobile && noteView === 'read';
+    const layout = isMobile ? (readingMobile ? 'preview' : 'live') : grouped && pane !== 'active'
             ? workspacePaneLayouts[pane]
             : settings.preview.layout;
     const showEditor = layout !== 'preview';
@@ -375,11 +372,12 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             </IconButton>
           </Tooltip>)}
         <div className="flex min-w-0 flex-1 items-center gap-1">
-          <input
+          {readingMobile ? (<h1 aria-label={t("workspace.note_title")} className="min-w-0 flex-1 truncate px-2 text-[14px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">
+              {note.title || <span className="font-medium text-[var(--text-quaternary)]">{t("common.untitled_note")}</span>}
+            </h1>) : (<input
             ref={titleInputRef}
             type="text"
             value={note.title}
-            readOnly={isMobile && mobilePane === 'preview'}
             maxLength={LIMITS.titleMaxLength}
             aria-label={t("workspace.note_title")}
             placeholder={t("common.untitled_note")}
@@ -392,7 +390,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 if (view) view.focus();
                 else event.currentTarget.blur();
             }}
-          />
+          />)}
           {note.isStarred && <Star size={11} className="shrink-0 fill-current text-[var(--warning)]"/>}
           {!grouped && (<span className="hidden shrink-0 text-[11px] text-[var(--text-quaternary)] md:inline">
               {updatedTime}
@@ -408,11 +406,16 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             onClick={() => void updateSettings({ editor: { livePreview: !livePreviewEnabled } })}
             className="mr-1 inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] md:h-7"
           >
-            <span>{t("workspace.live_preview")}</span>
+            <span className="hidden md:inline">{t("workspace.live_preview")}</span>
             <span aria-hidden="true" className={cn('relative h-3.5 w-6 shrink-0 rounded-full transition-colors', livePreviewEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border-strong)]')}>
               <span className={cn('absolute left-0.5 top-0.5 size-2.5 rounded-full bg-white transition-transform', livePreviewEnabled && 'translate-x-2.5')}/>
             </span>
           </button>)}
+          {isMobile && (<Tooltip label={readingMobile ? t("workspace.editing_mode") : t("workspace.reading_mode")} side="bottom">
+              <IconButton label={readingMobile ? t("workspace.editing_mode") : t("workspace.reading_mode")} size="sm" active={!readingMobile} onClick={() => setNoteView(readingMobile ? 'edit' : 'read')}>
+                {readingMobile ? <Pencil size={15}/> : <Eye size={15}/>}
+              </IconButton>
+            </Tooltip>)}
           {grouped ? (<>
             <div className="mr-1 hidden 2xl:block">
               <Segmented label={t("workspace.layout")} size="sm" value={layout} onChange={setEditorLayout} options={[
