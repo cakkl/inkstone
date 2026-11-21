@@ -28,6 +28,8 @@ import { broadcastCursor, scheduleFtsDrain } from '../lib/notify'
 import { assertContentSize, clampInt, JSON_BODY_LIMITS, readJson } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
 import { aiDeleteNeededSql, enqueueNoteIndex, noteIndexQueueStatement } from '../mcp/ai-search'
+import { enqueueSummary, dropQueuedSummary } from '../summary/queue'
+import { summarySourceHash } from '../summary/service'
 
 export const notesRoutes = new Hono<AppBindings>()
 
@@ -563,6 +565,13 @@ notesRoutes.patch('/:id', async (c) => {
   if (contentChanged || newTitle !== row.title) {
     await enqueueNoteIndex(c.env.DB, userId, id, 'embed')
     scheduleFtsDrain(c)
+    // 自动摘要只在后台跑：这里只登记，不等待模型。
+    await enqueueSummary(c.env.DB, {
+      userId,
+      noteId: id,
+      sourceHash: await summarySourceHash(newTitle, newContent),
+      now,
+    }).catch(() => undefined)
   }
   const nextTags = contentChanged ? (derivedTags ?? extractTags(newContent)) : null
   return c.json(toNote(applyPatchRow(row, sets, binds, nextTags)))
@@ -622,6 +631,8 @@ notesRoutes.delete('/:id', async (c) => {
   const changeResult = results.at(-1) as D1Result<{ seq: number }> | undefined
   await broadcastCursor(c, changeResult?.results?.[0]?.seq)
   scheduleFtsDrain(c)
+  // 进回收站就别再排摘要任务，恢复时按新正文重新登记。
+  await dropQueuedSummary(c.env.DB, userId, id).catch(() => undefined)
   const note = toNote({ ...row, deleted_at: now, updated_at: now, rev: nextRev })
   return c.json(note)
 })

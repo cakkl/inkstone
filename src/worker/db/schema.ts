@@ -612,6 +612,26 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
          ON note_summary_versions(note_id, created_at DESC, id DESC)`,
     ],
   },
+  {
+    // 自动摘要队列：每篇笔记一条，重复修改只更新时间，不叠加任务。
+    version: 17,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS note_summary_queue (
+        note_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        available_at INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        lease_until INTEGER,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_note_summary_queue_due
+         ON note_summary_queue(status, available_at, note_id)`,
+    ],
+  },
 ]
 
 const FTS_STATEMENT = `CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -665,6 +685,7 @@ const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ai_summary_usage_daily: ['user_id', 'date_utc', 'model', 'request_count', 'success_count', 'failure_count', 'input_tokens', 'output_tokens', 'neurons'],
   note_summary_drafts: ['note_id', 'user_id', 'draft_text', 'operation', 'source_hash', 'base_updated_at', 'model', 'prompt_version', 'created_at'],
   note_summary_versions: ['id', 'note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'operation', 'created_at'],
+  note_summary_queue: ['note_id', 'user_id', 'source_hash', 'status', 'available_at', 'attempts', 'lease_until', 'last_error', 'created_at', 'updated_at'],
 } as const
 
 const REQUIRED_TABLES = [
@@ -701,6 +722,7 @@ const REQUIRED_TABLES = [
   'ai_summary_usage_daily',
   'note_summary_drafts',
   'note_summary_versions',
+  'note_summary_queue',
 ] as const
 
 const REQUIRED_INDEXES = [
@@ -750,6 +772,7 @@ const REQUIRED_INDEXES = [
   'idx_note_summaries_user',
   'idx_note_summary_drafts_user',
   'idx_note_summary_versions_note',
+  'idx_note_summary_queue_due',
 ] as const
 
 
