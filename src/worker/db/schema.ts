@@ -547,6 +547,39 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_sessions_expires_id ON sessions(expires_at, id)`,
     ],
   },
+  {
+    // AI 摘要：正文之外的附属内容，不改动 notes 行。
+    version: 15,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS note_summaries (
+        note_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        summary_text TEXT NOT NULL,
+        summary_origin TEXT NOT NULL DEFAULT 'ai',
+        summary_language TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        summary_status TEXT NOT NULL DEFAULT 'current',
+        model TEXT,
+        prompt_version TEXT,
+        generated_at INTEGER,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_note_summaries_user
+         ON note_summaries(user_id, updated_at DESC)`,
+      `CREATE TABLE IF NOT EXISTS ai_summary_usage_daily (
+        user_id TEXT NOT NULL,
+        date_utc TEXT NOT NULL,
+        model TEXT NOT NULL,
+        request_count INTEGER NOT NULL DEFAULT 0,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        failure_count INTEGER NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        neurons REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, date_utc, model)
+      )`,
+    ],
+  },
 ]
 
 const FTS_STATEMENT = `CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -596,6 +629,8 @@ const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ai_note_embeddings: ['user_id', 'note_id', 'model', 'vector', 'indexed_at'],
   ai_index_queue: ['user_id', 'note_id', 'kind', 'created_at'],
   fts_index_queue: ['user_id', 'note_id', 'kind', 'created_at'],
+  note_summaries: ['note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'summary_status', 'model', 'prompt_version', 'generated_at', 'updated_at'],
+  ai_summary_usage_daily: ['user_id', 'date_utc', 'model', 'request_count', 'success_count', 'failure_count', 'input_tokens', 'output_tokens', 'neurons'],
 } as const
 
 const REQUIRED_TABLES = [
@@ -628,6 +663,8 @@ const REQUIRED_TABLES = [
   'ai_note_embeddings',
   'ai_index_queue',
   'fts_index_queue',
+  'note_summaries',
+  'ai_summary_usage_daily',
 ] as const
 
 const REQUIRED_INDEXES = [
@@ -674,6 +711,7 @@ const REQUIRED_INDEXES = [
   'idx_ai_embeddings_indexed',
   'idx_ai_index_queue_due',
   'idx_fts_index_queue_due',
+  'idx_note_summaries_user',
 ] as const
 
 

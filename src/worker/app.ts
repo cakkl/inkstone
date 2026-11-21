@@ -17,6 +17,7 @@ import { shareManageRoutes, sharePageRoutes, shareRoutes } from './routes/share'
 import { transferRoutes } from './routes/transfer'
 import { mcpAuthorizeRoutes } from './routes/mcp-authorize'
 import { mcpSettingsRoutes } from './routes/mcp-settings'
+import { summaryRoutes } from './routes/summary'
 import type { AppBindings } from './env'
 import { selectAttachmentStorage } from './attachments/backend'
 
@@ -85,6 +86,7 @@ export function createApp() {
 
   app.route('/api/auth/totp', totpRoutes)
   app.route('/api/auth', authRoutes)
+  app.route('/api/notes', summaryRoutes)
   app.route('/api/notes', notesRoutes)
   app.route('/api/folders', foldersRoutes)
   app.route('/api/tags', tagsRoutes)

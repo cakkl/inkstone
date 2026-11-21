@@ -35,6 +35,13 @@ export const LIMITS = {
   searchLimit: 50,
 
   ftsContentChars: 200_000,
+
+  /** AI 摘要：正文有效字符数门槛（含代码内容）。低于它只能手动生成。 */
+  aiSummaryMinChars: 100,
+  /** 摘要正文上限，防止模型返回超长内容撑大 D1 行。 */
+  aiSummaryMaxChars: 4000,
+  /** 每日 neurons 上限；免费额度为 10,000/天，留出 embedding 用量余量。 */
+  aiSummaryDailyNeurons: 8_000,
 } as const
 
 export const ACCENTS: { name: AccentName; swatch: string; foreground: string }[] = [

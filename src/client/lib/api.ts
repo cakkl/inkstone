@@ -1,6 +1,7 @@
 import { CLIENT_HEADER } from '@shared/constants'
 import type { MarkdownBackupManifest } from '@shared/backup-format'
 import type {
+  AiNoteSummaryResponse,
   AppLocale,
   Attachment,
   AttachmentWithUsage,
@@ -347,13 +348,23 @@ export const api = {
       request<Note>(`/api/notes/${id}/duplicate`, { method: 'POST', body }),
     emptyTrash: () => request<{ purged: number }>('/api/notes/trash/empty', { method: 'POST' }),
     versions: (id: string, signal?: AbortSignal) =>
-      request<{ versions: NoteVersionMeta[] }>(`/api/notes/${id}/versions`, { signal }),
-    version: (id: string, versionId: string, signal?: AbortSignal) =>
+      request<{ versions: NoteVersionMeta[] }>(`/api/notes/${id}/versions`, { signal }),    version: (id: string, versionId: string, signal?: AbortSignal) =>
       request<NoteVersion>(`/api/notes/${id}/versions/${versionId}`, { signal }),
     restoreVersion: (id: string, versionId: string) =>
       request<Note>(`/api/notes/${id}/versions/${versionId}/restore`, { method: 'POST' }),
     backlinks: (id: string, signal?: AbortSignal) =>
       request<{ backlinks: Backlink[] }>(`/api/notes/${id}/backlinks`, { signal }),
+    summary: (id: string, signal?: AbortSignal) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, { signal }),
+    generateSummary: (id: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, {
+        method: 'POST',
+        timeoutMs: 60_000,
+      }),
+    saveSummary: (id: string, text: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, { method: 'PATCH', body: { text } }),
+    deleteSummary: (id: string) =>
+      request<{ ok: true }>(`/api/notes/${id}/summary`, { method: 'DELETE' }),
   },
 
   folders: {

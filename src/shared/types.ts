@@ -156,6 +156,33 @@ export interface Note extends NoteSummary {
   content: string
 }
 
+/** AI 摘要的来源：AI 生成后未被手改 / 用户手改过。 */
+export type AiSummaryOrigin = 'ai' | 'user'
+
+/** `outdated` 表示正文在摘要生成后已变化，内容可能过期。 */
+export type AiSummaryStatus = 'current' | 'outdated'
+
+export interface AiNoteSummary {
+  noteId: string
+  text: string
+  origin: AiSummaryOrigin
+  status: AiSummaryStatus
+  language: string
+  model: string | null
+  generatedAt: number | null
+  updatedAt: number
+}
+
+export interface AiNoteSummaryResponse {
+  summary: AiNoteSummary | null
+  /** 生成前需要达到的有效字符数；低于它只能靠手动生成。 */
+  minimumCharacters: number
+  /** 该笔记当前的有效字符数。 */
+  characterCount: number
+  /** 今日剩余可用额度（neurons），已用尽时为 0。 */
+  remainingNeurons: number
+}
+
 export interface Folder {
   id: string
   parentId: string | null
@@ -604,3 +631,6 @@ export type ApiErrorCode =
   | 'two_factor_not_enabled'
   | 'two_factor_setup_expired'
   | 'two_factor_unavailable'
+  | 'ai_unavailable'
+  | 'ai_quota_exhausted'
+  | 'ai_failed'

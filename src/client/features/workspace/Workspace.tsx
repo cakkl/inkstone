@@ -23,6 +23,7 @@ import { Outline } from '../preview/Outline';
 import { SplitResizer } from '../shell/Resizer';
 import { EditorToolbar } from './EditorToolbar';
 import { BacklinksPanel } from './BacklinksPanel';
+import { SummaryPanel } from '../summary/SummaryPanel';
 import { SaveIndicator } from '../shell/SaveIndicator';
 import type { Heading } from '../../lib/markdown/renderer';
 import { useUi, type WorkspacePane } from '../../store/ui';
@@ -497,6 +498,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
       </header>
 
       {settings.editor.showToolbar && showEditor && (<EditorToolbar runCommand={runEditorCommand} mobile={isMobile} onPickImage={() => fileInputRef.current?.click()}/>)}
+
+      {paneActive && (<SummaryPanel noteId={note.id} updatedAt={note.updatedAt} disabled={serverOnlyDisabled}/>)}
 
       <div ref={containerRef} className={cn("relative flex min-h-0 flex-1", isMobile && "flex-col")} data-editor-layout={layout}>
         {/* visibility keeps the editor measured; display:none would collapse CodeMirror's height cache. */}
