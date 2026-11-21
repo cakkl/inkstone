@@ -75,7 +75,9 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const moreButtonRef = useRef<HTMLButtonElement>(null);
     const exportMenuRef = useRef<HTMLButtonElement>(null);
     const [view, setView] = useState<EditorView | null>(null);
-    const readingKey = userId && note ? readingPositionKey(userId, note.id) : null;
+    // 编辑器与预览的像素高度不同，坐标不能互用，各存一份。
+    const editorReadingKey = userId && note ? readingPositionKey(userId, note.id, 'editor') : null;
+    const previewReadingKey = userId && note ? readingPositionKey(userId, note.id, 'preview') : null;
     const pendingReadingRef = useRef<{ key: string; position: ReturnType<typeof captureReadingPosition> } | null>(null);
     const readingTimerRef = useRef<number | undefined>(undefined);
     const editorScrollCleanupRef = useRef<(() => void) | null>(null);
@@ -103,30 +105,30 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             window.removeEventListener('pagehide', flushReadingPosition);
             flushReadingPosition();
         };
-    }, [readingKey, flushReadingPosition]);
+    }, [editorReadingKey, flushReadingPosition]);
     const onEditorReady = useCallback((next: EditorView | null) => {
         editorScrollCleanupRef.current?.();
         editorScrollCleanupRef.current = null;
         setView(next);
         if (!next) return;
         const scroller = next.scrollDOM;
-        const position = readingKey
-            ? pendingReadingRef.current?.key === readingKey
+        const position = editorReadingKey
+            ? pendingReadingRef.current?.key === editorReadingKey
                 ? pendingReadingRef.current.position
-                : readReadingPosition(readingKey)
+                : readReadingPosition(editorReadingKey)
             : null;
         let frame = window.requestAnimationFrame(() => {
             frame = window.requestAnimationFrame(() => {
                 if (position) restoreReadingPosition(scroller, position);
             });
         });
-        const onScroll = () => saveReadingPosition(scroller, readingKey);
+        const onScroll = () => saveReadingPosition(scroller, editorReadingKey);
         scroller.addEventListener('scroll', onScroll, { passive: true });
         editorScrollCleanupRef.current = () => {
             window.cancelAnimationFrame(frame);
             scroller.removeEventListener('scroll', onScroll);
         };
-    }, [readingKey, saveReadingPosition]);
+    }, [editorReadingKey, saveReadingPosition]);
     const [headings, setHeadings] = useState<Heading[]>([]);
     const [moreMenuOpen, setMoreMenuOpen] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -148,6 +150,11 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             : settings.preview.layout;
     const showEditor = layout !== 'preview';
     const livePreviewEnabled = settings.editor.livePreview;
+    // 隐藏期间沿用最后一次可见的渲染模式：查看模式布局是 preview，若据此关掉即时渲染，
+    // compartment 会被重配置、高度图重建，切回时位置就会跳。
+    const lastShownLayoutRef = useRef(layout);
+    if (showEditor) lastShownLayoutRef.current = layout;
+    const livePreviewActive = livePreviewEnabled && (showEditor ? layout === 'live' : lastShownLayoutRef.current === 'live');
     const showPreview = layout !== 'live';
     const showSplit = layout === 'split';
     const outlineVisible = !isMobile && outlineOpen && paneActive && headings.length > 0;
@@ -168,10 +175,11 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             : `calc((100% + ${PREVIEW_BORDER_WIDTH + defaultOutlineWidth - SPLIT_HANDLE_WIDTH}px) / 2)`
         : `${(1 - splitRatio) * 100}%`;
     const updatedTime = useRelativeTime(note?.updatedAt ?? 0, Boolean(note));
+    // 只在换笔记时清空：清空会让大纲列消失、编辑区宽度变化，进而带偏滚动位置。
     useLayoutEffect(() => {
         setHeadings([]);
         setMobileOutlineOpen(false);
-    }, [note?.id, showPreview, livePreviewEnabled]);
+    }, [note?.id]);
     useLayoutEffect(() => {
         const container = containerRef.current;
         if (!container)
@@ -490,15 +498,16 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
 
       {settings.editor.showToolbar && showEditor && (<EditorToolbar runCommand={runEditorCommand} mobile={isMobile} onPickImage={() => fileInputRef.current?.click()}/>)}
 
-      <div ref={containerRef} className={cn("flex min-h-0 flex-1", isMobile && "flex-col")} data-editor-layout={layout}>
-        <div hidden={!showEditor} inert={!showEditor} className="min-h-0 min-w-0" style={{ width: showSplit && !isMobile ? editorWidth : outlineVisible ? `calc(100% - ${OUTLINE_WIDTH}px)` : '100%', flex: isMobile ? 1 : undefined }}>
-            <DeferredCodeEditor key={note.id} visible={showEditor} value={content} noteTitle={note.title} live={showEditor && layout === 'live' && livePreviewEnabled} onHeadings={setHeadings} onChange={onChange} settings={settings.editor} sources={sources} handlers={handlers} onReady={onEditorReady}/>
+      <div ref={containerRef} className={cn("relative flex min-h-0 flex-1", isMobile && "flex-col")} data-editor-layout={layout}>
+        {/* visibility keeps the editor measured; display:none would collapse CodeMirror's height cache. */}
+        <div inert={!showEditor} aria-hidden={!showEditor} className={cn("min-h-0 min-w-0", !showEditor && "pointer-events-none invisible absolute inset-0")} style={{ width: showSplit && !isMobile ? editorWidth : outlineVisible ? `calc(100% - ${OUTLINE_WIDTH}px)` : '100%', flex: showEditor && isMobile ? 1 : undefined }}>
+            <DeferredCodeEditor key={note.id} visible={showEditor} value={content} noteTitle={note.title} live={livePreviewActive} onHeadings={setHeadings} onChange={onChange} settings={settings.editor} sources={sources} handlers={handlers} onReady={onEditorReady}/>
           </div>
 
         {showSplit && !isMobile && (<SplitResizer label={t("workspace.resize_editor_and_preview_panes")} containerRef={containerRef} ratio={effectiveSplitRatio} onChange={(splitRatio) => setLayout({ splitRatio })} onReset={() => setLayout({ splitRatio: null })}/>)}
 
         {showPreview && (<div className={cn('flex min-h-0 min-w-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--bg-editor)]', isMobile && layout === 'split' && 'flex-1 border-l-0 border-t', layout === 'preview' && 'flex-1 border-l-0')} style={{ width: layout === 'split' && !isMobile ? previewWidth : '100%' }}>
-            <Preview key={note.id} content={content} noteId={note.id} noteTitle={note.title} onHeadings={setHeadings} scrollerRef={previewScrollerRef} onRendered={invalidateSyncAnchors} onInitialRender={(scroller) => restoreReading(scroller, readingKey)} onScroll={(scroller) => saveReadingPosition(scroller, readingKey)} className="min-w-0 flex-1"/>
+            <Preview key={note.id} content={content} noteId={note.id} noteTitle={note.title} onHeadings={setHeadings} scrollerRef={previewScrollerRef} onRendered={invalidateSyncAnchors} onInitialRender={(scroller) => restoreReading(scroller, previewReadingKey)} onScroll={(scroller) => saveReadingPosition(scroller, previewReadingKey)} className="min-w-0 flex-1"/>
             {outlineVisible && (<Outline headings={headings} onSelect={jumpToHeading} scrollerRef={previewScrollerRef}/>)}
           </div>)}
         {!showPreview && outlineVisible && <Outline headings={headings} onSelect={jumpToHeading}/>}
