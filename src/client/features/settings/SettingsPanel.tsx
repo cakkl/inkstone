@@ -1,10 +1,11 @@
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { BrainCircuit, Cloud, Database, Info, Keyboard, Link2, Palette, RefreshCw, Type, UserRound, X, } from 'lucide-react';
+import { BrainCircuit, Cloud, Database, Info, Keyboard, Link2, Palette, RefreshCw, Type, UserRound, } from 'lucide-react';
 import { ACCENTS } from '@shared/constants';
 import { cn } from '../../lib/cn';
-import { Tooltip, useDialogFocus, useEscape, useLockScroll } from '../../components/overlay';
-import { Button, IconButton } from '../../components/primitives';
+import { useDialogFocus, useEscape, useLockScroll } from '../../components/overlay';
+import { OverlayHeader } from '../../components/overlay-header';
+import { Button } from '../../components/primitives';
 import { SettingsLoading } from './SettingsLoading';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { Empty } from '../../components/feedback';
@@ -93,16 +94,7 @@ export function SettingsPanel({ onClose }: {
 
         { }
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--border-subtle)] px-4 md:px-5">
-            <h2 className="text-[14px] font-semibold tracking-[-0.012em]">
-              {SECTIONS.find((s) => s.id === section)?.label()}
-            </h2>
-            <Tooltip label={t("common.close")} combo="escape" side="left">
-              <IconButton label={t("common.close")} size="sm" onClick={onClose}>
-                <X size={15}/>
-              </IconButton>
-            </Tooltip>
-          </header>
+          <OverlayHeader title={SECTIONS.find((s) => s.id === section)?.label() ?? ''} onClose={onClose}/>
 
           {visited.map((page) => (<div key={page} hidden={page !== section} inert={page !== section} aria-hidden={page !== section} className={cn('min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-[calc(16px+env(safe-area-inset-bottom))] md:px-5 md:py-4', page !== section && 'hidden')}>
             {page === 'appearance' ? <AppearancePage accents={ACCENTS}/> : !online && OFFLINE_BLOCKED_SECTIONS.has(page) ? (<Empty art="select" compact title={t('common.offline_unavailable')} description={t('settings.reconnect_to_load_this_section')}/>) : <SettingsPage section={page}/>}

@@ -89,7 +89,6 @@
     width: 100%;
     height: 100vh;
     height: 100dvh;
-    height: var(--app-viewport-height, 100dvh);
     min-height: 0;
     overflow: hidden;
     isolation: isolate;
@@ -528,6 +527,13 @@
   transform: none;
   pointer-events: auto;
   transition-delay: 0s;
+}
+/* iOS 系统返回手势已经播过自己的过渡，这里再补一段会看到第二个关闭动画。 */
+[data-instant] .mobile-pane-layer,
+[data-instant] .mobile-account-list,
+[data-instant] .mobile-settings-detail,
+[data-instant] .mobile-bottom-nav button {
+  transition: none;
 }
 .mobile-account-list {
   transition: transform var(--dur-slow) var(--ease-out);

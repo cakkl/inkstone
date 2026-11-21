@@ -1,7 +1,10 @@
 type ReadingPosition = { top: number; max: number }
 
-export function readingPositionKey(userId: string, noteId: string): string {
-  return `inkstone:reading-position:${userId}:${noteId}`
+/** 两个滚动容器的高度完全不同，像素值不能互相套用，必须各存一份。 */
+export type ReadingSurface = 'editor' | 'preview'
+
+export function readingPositionKey(userId: string, noteId: string, surface: ReadingSurface = 'editor'): string {
+  return `inkstone:reading-position:${userId}:${noteId}:${surface}`
 }
 
 export function captureReadingPosition(scroller: HTMLElement): ReadingPosition {

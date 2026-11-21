@@ -30,6 +30,7 @@ import { useSession } from '../../store/session';
 import { createContextualNote, useActiveNote, useNotes } from '../../store/notes';
 import { folderPathLabel, openFolderView } from '../../lib/folders';
 import { useSyncScroll } from './sync-scroll';
+import { runServerOnly as runServerOnlyAction } from './server-only';
 import { captureReadingPosition, readReadingPosition, readingPositionKey, restoreReadingPosition, writeReadingPosition } from './reading-position';
 import { t, useLocale } from "../../lib/i18n";
 import { preferredScrollBehavior } from '../../lib/motion';
@@ -74,7 +75,9 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const moreButtonRef = useRef<HTMLButtonElement>(null);
     const exportMenuRef = useRef<HTMLButtonElement>(null);
     const [view, setView] = useState<EditorView | null>(null);
-    const readingKey = userId && note ? readingPositionKey(userId, note.id) : null;
+    // 编辑器与预览的像素高度不同，坐标不能互用，各存一份。
+    const editorReadingKey = userId && note ? readingPositionKey(userId, note.id, 'editor') : null;
+    const previewReadingKey = userId && note ? readingPositionKey(userId, note.id, 'preview') : null;
     const pendingReadingRef = useRef<{ key: string; position: ReturnType<typeof captureReadingPosition> } | null>(null);
     const readingTimerRef = useRef<number | undefined>(undefined);
     const editorScrollCleanupRef = useRef<(() => void) | null>(null);
@@ -102,30 +105,30 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             window.removeEventListener('pagehide', flushReadingPosition);
             flushReadingPosition();
         };
-    }, [readingKey, flushReadingPosition]);
+    }, [editorReadingKey, flushReadingPosition]);
     const onEditorReady = useCallback((next: EditorView | null) => {
         editorScrollCleanupRef.current?.();
         editorScrollCleanupRef.current = null;
         setView(next);
         if (!next) return;
         const scroller = next.scrollDOM;
-        const position = readingKey
-            ? pendingReadingRef.current?.key === readingKey
+        const position = editorReadingKey
+            ? pendingReadingRef.current?.key === editorReadingKey
                 ? pendingReadingRef.current.position
-                : readReadingPosition(readingKey)
+                : readReadingPosition(editorReadingKey)
             : null;
         let frame = window.requestAnimationFrame(() => {
             frame = window.requestAnimationFrame(() => {
                 if (position) restoreReadingPosition(scroller, position);
             });
         });
-        const onScroll = () => saveReadingPosition(scroller, readingKey);
+        const onScroll = () => saveReadingPosition(scroller, editorReadingKey);
         scroller.addEventListener('scroll', onScroll, { passive: true });
         editorScrollCleanupRef.current = () => {
             window.cancelAnimationFrame(frame);
             scroller.removeEventListener('scroll', onScroll);
         };
-    }, [readingKey, saveReadingPosition]);
+    }, [editorReadingKey, saveReadingPosition]);
     const [headings, setHeadings] = useState<Heading[]>([]);
     const [moreMenuOpen, setMoreMenuOpen] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -139,17 +142,19 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         : !online ? t("common.offline_unavailable") : null;
     const serverOnlyDisabled = serverOnlyReason !== null;
     const paneActive = !grouped || pane === 'active' || activeWorkspacePane === pane;
-    const mobilePane = useUi((s) => s.mobilePane);
-    const notePaneMode = useRef<'live' | 'preview'>(mobilePane === 'preview' ? 'preview' : 'live');
-    if (mobilePane === 'preview')
-        notePaneMode.current = 'preview';
-    else if (mobilePane === 'editor')
-        notePaneMode.current = 'live';
-    const layout = isMobile ? notePaneMode.current : grouped && pane !== 'active'
+    const noteView = useUi((s) => s.noteView);
+    const setNoteView = useUi((s) => s.setNoteView);
+    const readingMobile = isMobile && noteView === 'read';
+    const layout = isMobile ? (readingMobile ? 'preview' : 'live') : grouped && pane !== 'active'
             ? workspacePaneLayouts[pane]
             : settings.preview.layout;
     const showEditor = layout !== 'preview';
     const livePreviewEnabled = settings.editor.livePreview;
+    // 隐藏期间沿用最后一次可见的渲染模式：查看模式布局是 preview，若据此关掉即时渲染，
+    // compartment 会被重配置、高度图重建，切回时位置就会跳。
+    const lastShownLayoutRef = useRef(layout);
+    if (showEditor) lastShownLayoutRef.current = layout;
+    const livePreviewActive = livePreviewEnabled && (showEditor ? layout === 'live' : lastShownLayoutRef.current === 'live');
     const showPreview = layout !== 'live';
     const showSplit = layout === 'split';
     const outlineVisible = !isMobile && outlineOpen && paneActive && headings.length > 0;
@@ -170,10 +175,11 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             : `calc((100% + ${PREVIEW_BORDER_WIDTH + defaultOutlineWidth - SPLIT_HANDLE_WIDTH}px) / 2)`
         : `${(1 - splitRatio) * 100}%`;
     const updatedTime = useRelativeTime(note?.updatedAt ?? 0, Boolean(note));
+    // 只在换笔记时清空：清空会让大纲列消失、编辑区宽度变化，进而带偏滚动位置。
     useLayoutEffect(() => {
         setHeadings([]);
         setMobileOutlineOpen(false);
-    }, [note?.id, showPreview, livePreviewEnabled]);
+    }, [note?.id]);
     useLayoutEffect(() => {
         const container = containerRef.current;
         if (!container)
@@ -302,25 +308,18 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         { id: 'html', label: t("workspace.export_html"), icon: <FileCode size={13}/>, onSelect: () => void exportNote('html') },
         { id: 'pdf', label: t("workspace.export_pdf"), icon: <FileDown size={13}/>, onSelect: () => void exportNote('pdf') },
     ];
+    // 移动端菜单项没有悬停提示的位置，改为「可点但弹说明」；桌面端仍保持禁用 + tooltip。
+    const runServerOnly = (run: () => void) => runServerOnlyAction(serverOnlyReason, (title) => toast({ title }), run);
+    const serverOnlyItem = (id: string, label: string, icon: MenuItem['icon'], run: () => void): MenuItem => isMobile
+        ? { id, label, icon, onSelect: () => runServerOnly(run) }
+        : { id, label, icon, disabled: serverOnlyDisabled, onSelect: run };
     const mobileItems: MenuItem[] = [
         ...(isMobile ? [
             { id: 'star', label: note.isStarred ? t("common.remove_from_favorites") : t("navigation.favorites"), checked: note.isStarred, onSelect: () => void patchNote(note.id, { isStarred: !note.isStarred }) },
-            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, disabled: isDraftNote, onSelect: toggleBacklinks },
+            { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, onSelect: () => runServerOnly(toggleBacklinks) },
         ] : []),
-        {
-            id: 'versions',
-            label: t("common.version_history"),
-            icon: <History size={13}/>,
-            disabled: serverOnlyDisabled,
-            onSelect: () => openPanel('versions'),
-        },
-        {
-            id: 'share',
-            label: t("workspace.share"),
-            icon: <Share2 size={13}/>,
-            disabled: serverOnlyDisabled,
-            onSelect: () => openPanel('share'),
-        },
+        serverOnlyItem('versions', t("common.version_history"), <History size={13}/>, () => openPanel('versions')),
+        serverOnlyItem('share', t("workspace.share"), <Share2 size={13}/>, () => openPanel('share')),
         {
             id: 'export-md',
             label: t("workspace.export_markdown"),
@@ -371,6 +370,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         if (grouped && pane !== 'active' && !paneActive)
             activateWorkspacePane(pane);
     };
+    // 移动端进入式头部与 components/overlay-header.tsx 的 back 形态同一套尺寸（h-11 / px-3 / 32×32 按钮 / 16 图标）。
+    // 这里标题是可编辑输入框，不能直接用该组件，改任一边时需同步。
     return (<div role={grouped ? 'region' : undefined} aria-label={grouped ? (pane === 'secondary' ? t("workspace.right_note_pane") : t("workspace.left_note_pane")) : undefined} data-workspace-pane={grouped ? pane : undefined} onPointerDownCapture={activatePane} onFocusCapture={activatePane} className={cn('flex h-full min-h-0 flex-col bg-[var(--bg-editor)]', grouped && paneActive && 'shadow-[inset_0_2px_0_var(--accent)]')}>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] px-3">
         {isMobile && onMobileBack && (<Tooltip label={t("workspace.back_to_notes")} side="right">
@@ -379,11 +380,12 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             </IconButton>
           </Tooltip>)}
         <div className="flex min-w-0 flex-1 items-center gap-1">
-          <input
+          {readingMobile ? (<h1 aria-label={t("workspace.note_title")} className="min-w-0 flex-1 truncate px-2 text-[14px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">
+              {note.title || <span className="font-medium text-[var(--text-quaternary)]">{t("common.untitled_note")}</span>}
+            </h1>) : (<input
             ref={titleInputRef}
             type="text"
             value={note.title}
-            readOnly={isMobile && mobilePane === 'preview'}
             maxLength={LIMITS.titleMaxLength}
             aria-label={t("workspace.note_title")}
             placeholder={t("common.untitled_note")}
@@ -396,7 +398,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 if (view) view.focus();
                 else event.currentTarget.blur();
             }}
-          />
+          />)}
           {note.isStarred && <Star size={11} className="shrink-0 fill-current text-[var(--warning)]"/>}
           {!grouped && (<span className="hidden shrink-0 text-[11px] text-[var(--text-quaternary)] md:inline">
               {updatedTime}
@@ -412,11 +414,16 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
             onClick={() => void updateSettings({ editor: { livePreview: !livePreviewEnabled } })}
             className="mr-1 inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[11px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] md:h-7"
           >
-            <span>{t("workspace.live_preview")}</span>
+            <span className="hidden md:inline">{t("workspace.live_preview")}</span>
             <span aria-hidden="true" className={cn('relative h-3.5 w-6 shrink-0 rounded-full transition-colors', livePreviewEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border-strong)]')}>
               <span className={cn('absolute left-0.5 top-0.5 size-2.5 rounded-full bg-white transition-transform', livePreviewEnabled && 'translate-x-2.5')}/>
             </span>
           </button>)}
+          {isMobile && (<Tooltip label={readingMobile ? t("workspace.editing_mode") : t("workspace.reading_mode")} side="bottom">
+              <IconButton label={readingMobile ? t("workspace.editing_mode") : t("workspace.reading_mode")} size="sm" active={!readingMobile} onClick={() => setNoteView(readingMobile ? 'edit' : 'read')}>
+                {readingMobile ? <Pencil size={15}/> : <Eye size={15}/>}
+              </IconButton>
+            </Tooltip>)}
           {grouped ? (<>
             <div className="mr-1 hidden 2xl:block">
               <Segmented label={t("workspace.layout")} size="sm" value={layout} onChange={setEditorLayout} options={[
@@ -491,15 +498,16 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
 
       {settings.editor.showToolbar && showEditor && (<EditorToolbar runCommand={runEditorCommand} mobile={isMobile} onPickImage={() => fileInputRef.current?.click()}/>)}
 
-      <div ref={containerRef} className={cn("flex min-h-0 flex-1", isMobile && "flex-col")} data-editor-layout={layout}>
-        <div hidden={!showEditor} inert={!showEditor} className="min-h-0 min-w-0" style={{ width: showSplit && !isMobile ? editorWidth : outlineVisible ? `calc(100% - ${OUTLINE_WIDTH}px)` : '100%', flex: isMobile ? 1 : undefined }}>
-            <DeferredCodeEditor key={note.id} visible={showEditor} value={content} noteTitle={note.title} live={showEditor && layout === 'live' && livePreviewEnabled} onHeadings={setHeadings} onChange={onChange} settings={settings.editor} sources={sources} handlers={handlers} onReady={onEditorReady}/>
+      <div ref={containerRef} className={cn("relative flex min-h-0 flex-1", isMobile && "flex-col")} data-editor-layout={layout}>
+        {/* visibility keeps the editor measured; display:none would collapse CodeMirror's height cache. */}
+        <div inert={!showEditor} aria-hidden={!showEditor} className={cn("min-h-0 min-w-0", !showEditor && "pointer-events-none invisible absolute inset-0")} style={{ width: showSplit && !isMobile ? editorWidth : outlineVisible ? `calc(100% - ${OUTLINE_WIDTH}px)` : '100%', flex: showEditor && isMobile ? 1 : undefined }}>
+            <DeferredCodeEditor key={note.id} visible={showEditor} value={content} noteTitle={note.title} live={livePreviewActive} onHeadings={setHeadings} onChange={onChange} settings={settings.editor} sources={sources} handlers={handlers} onReady={onEditorReady}/>
           </div>
 
         {showSplit && !isMobile && (<SplitResizer label={t("workspace.resize_editor_and_preview_panes")} containerRef={containerRef} ratio={effectiveSplitRatio} onChange={(splitRatio) => setLayout({ splitRatio })} onReset={() => setLayout({ splitRatio: null })}/>)}
 
         {showPreview && (<div className={cn('flex min-h-0 min-w-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--bg-editor)]', isMobile && layout === 'split' && 'flex-1 border-l-0 border-t', layout === 'preview' && 'flex-1 border-l-0')} style={{ width: layout === 'split' && !isMobile ? previewWidth : '100%' }}>
-            <Preview key={note.id} content={content} noteId={note.id} noteTitle={note.title} onHeadings={setHeadings} scrollerRef={previewScrollerRef} onRendered={invalidateSyncAnchors} onInitialRender={(scroller) => restoreReading(scroller, readingKey)} onScroll={(scroller) => saveReadingPosition(scroller, readingKey)} className="min-w-0 flex-1"/>
+            <Preview key={note.id} content={content} noteId={note.id} noteTitle={note.title} onHeadings={setHeadings} scrollerRef={previewScrollerRef} onRendered={invalidateSyncAnchors} onInitialRender={(scroller) => restoreReading(scroller, previewReadingKey)} onScroll={(scroller) => saveReadingPosition(scroller, previewReadingKey)} className="min-w-0 flex-1"/>
             {outlineVisible && (<Outline headings={headings} onSelect={jumpToHeading} scrollerRef={previewScrollerRef}/>)}
           </div>)}
         {!showPreview && outlineVisible && <Outline headings={headings} onSelect={jumpToHeading}/>}

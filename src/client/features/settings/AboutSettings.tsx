@@ -19,6 +19,9 @@ export function AboutSettings() {
     const offlineStatus = usePwa((s) => s.offlineStatus);
     const offlineCompleted = usePwa((s) => s.offlineCompleted);
     const offlineTotal = usePwa((s) => s.offlineTotal);
+    const updateReady = usePwa((s) => s.updateReady);
+    const updating = usePwa((s) => s.updating);
+    const applyUpdate = usePwa((s) => s.applyUpdate);
     const loggingOutRef = useRef(false);
     const [loggingOut, setLoggingOut] = useState(false);
     const exit = async () => {
@@ -77,7 +80,7 @@ export function AboutSettings() {
         </div>
       </section>
 
-      {(installAvailable || installed || offlineStatus !== 'idle') && (<section>
+      {(installAvailable || installed || offlineStatus !== 'idle' || updateReady) && (<section>
         <h3 className="mb-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">{t("pwa.app_installation")}</h3>
         {(installAvailable || installed) && (<SettingRow title={t("pwa.install_inkstone")} description={t("pwa.install_description")}>
             {installed
@@ -102,6 +105,9 @@ export function AboutSettings() {
                     })}
           </Badge>
         </SettingRow>)}
+        {updateReady && (<SettingRow title={t("pwa.update_ready")} description={t("pwa.update_ready_row_description")}>
+            <Button size="sm" variant="secondary" loading={updating} onClick={() => void applyUpdate()}>{t("pwa.refresh_now")}</Button>
+          </SettingRow>)}
       </section>)}
 
       <section className="flex items-center justify-between rounded-[var(--r-lg)] border border-[var(--border-subtle)] bg-[var(--bg-base)] p-4">

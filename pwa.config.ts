@@ -222,12 +222,16 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const cached = await caches.match(request, { ignoreSearch: true, ignoreVary: true })
     if (cached) return cached
-    const response = await fetch(request)
-    if (response.ok && OPTIONAL_URL_SET.has(url.pathname)) {
-      const assets = await caches.open(ASSET_CACHE)
-      await assets.put(url.pathname, response.clone())
+    try {
+      const response = await fetch(request)
+      if (response.ok && OPTIONAL_URL_SET.has(url.pathname)) {
+        const assets = await caches.open(ASSET_CACHE)
+        await assets.put(url.pathname, response.clone())
+      }
+      return response
+    } catch {
+      return Response.error()
     }
-    return response
   })())
 })
 
@@ -250,7 +254,12 @@ async function cacheFirstAttachment(request, pathname) {
   const cache = await caches.open(FILES_CACHE)
   const cached = await cache.match(pathname)
   if (cached) return cached
-  const response = await fetch(request)
+  let response
+  try {
+    response = await fetch(request)
+  } catch {
+    return Response.error()
+  }
   if (response.status === 200) {
     const length = Number(response.headers.get('content-length'))
     if (!Number.isFinite(length) || length <= MAX_CACHED_FILE_BYTES) {

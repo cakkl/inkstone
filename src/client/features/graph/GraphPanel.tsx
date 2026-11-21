@@ -19,6 +19,8 @@ import type { GraphNode, GraphQuery, GraphResponse } from '@shared/types'
 import { organizerColorOrNull } from '@shared/organizer-colors'
 import { truncateText } from '@shared/text-utils'
 import { buildGraph } from '../../lib/graph'
+import { useBreakpoint } from '../../lib/hooks'
+import { OverlayHeader } from '../../components/overlay-header'
 import { Button, IconButton } from '../../components/primitives'
 import { Menu, Tooltip, useDialogFocus, useEscape, useLockScroll, type MenuItem } from '../../components/overlay'
 import { Empty, LoadingBlock } from '../../components/feedback'
@@ -461,45 +463,46 @@ export function GraphPanel({ onClose }: { onClose: () => void }) {
     setPrefs((current) => ({ ...current, [key]: value }))
   }
 
+  const narrow = useBreakpoint() === 'mobile'
+  const summary = data ? <>
+      {data.nodes.filter((node) => node.kind === 'note').length}{t('graph.notes')}{data.edges.length}{t('graph.links')}
+      {data.nodes.some((node) => node.kind === 'unresolved') && ` · ${data.nodes.filter((node) => node.kind === 'unresolved').length}${t('graph.unresolved_short')}`}
+    </> : null
+  const controls = <>
+    <div className="flex h-8 items-center rounded-[var(--r-md)] bg-[var(--bg-inset)] p-0.5" role="group" aria-label={t('graph.scope')}>
+      <button type="button" aria-pressed={prefs.mode === 'global'} onClick={() => changePref('mode', 'global')}
+        className={`h-7 rounded-[var(--r-sm)] px-2.5 text-[11.5px] ${prefs.mode === 'global' ? 'bg-[var(--bg-overlay)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-tertiary)]'}`}>
+        {t('graph.global')}
+      </button>
+      <button type="button" aria-pressed={prefs.mode === 'local'} disabled={!activeNoteId} onClick={() => changePref('mode', 'local')}
+        className={`h-7 rounded-[var(--r-sm)] px-2.5 text-[11.5px] disabled:opacity-40 ${prefs.mode === 'local' ? 'bg-[var(--bg-overlay)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-tertiary)]'}`}>
+        {t('graph.local')}
+      </button>
+    </div>
+    <label className="flex h-8 min-w-[150px] flex-1 items-center gap-2 rounded-[var(--r-md)] border border-[var(--border-default)] bg-[var(--bg-inset)] px-2.5 md:max-w-[320px]">
+      <Search size={13} className="shrink-0 text-[var(--text-quaternary)]"/>
+      <span className="sr-only">{t('graph.search_notes')}</span>
+      <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('graph.search_notes')}
+        className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-[var(--text-quaternary)]"/>
+      {search && <button type="button" aria-label={t('common.clear')} onClick={() => setSearch('')}><X size={12}/></button>}
+    </label>
+    <div className="ml-auto flex items-center gap-1">
+      <Tooltip label={t('common.zoom_out')}><IconButton label={t('common.zoom_out')} size="sm" disabled={!data?.nodes.length} onClick={() => {
+        const state = stateRef.current; state.scale = Math.max(0.2, state.scale - 0.2); state.schedule?.()
+      }}><Minus size={14}/></IconButton></Tooltip>
+      <Tooltip label={t('graph.fit')}><IconButton label={t('graph.reset')} size="sm" disabled={!data?.nodes.length} onClick={fitGraph}><Maximize2 size={13}/></IconButton></Tooltip>
+      <Tooltip label={t('common.zoom_in')}><IconButton label={t('common.zoom_in')} size="sm" disabled={!data?.nodes.length} onClick={() => {
+        const state = stateRef.current; state.scale = Math.min(4, state.scale + 0.2); state.schedule?.()
+      }}><Plus size={14}/></IconButton></Tooltip>
+      <Tooltip label={t('graph.settings')}><IconButton label={t('graph.settings')} size="sm" aria-pressed={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}><Settings2 size={14}/></IconButton></Tooltip>
+    </div>
+  </>
   return createPortal(<div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
     className="app-viewport-fixed fixed z-[230] flex flex-col bg-[var(--bg-base)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] outline-none md:py-0">
-    <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 md:px-4">
-      <div className="mr-1 flex min-w-0 items-baseline gap-2.5">
-        <h2 id={titleId} className="text-[14px] font-semibold tracking-[-0.014em]">{t('common.graph')}</h2>
-        {data && <span className="whitespace-nowrap text-[11.5px] text-[var(--text-quaternary)]">
-          {data.nodes.filter((node) => node.kind === 'note').length}{t('graph.notes')}{data.edges.length}{t('graph.links')}
-          {data.nodes.some((node) => node.kind === 'unresolved') && ` · ${data.nodes.filter((node) => node.kind === 'unresolved').length}${t('graph.unresolved_short')}`}
-        </span>}
-      </div>
-      <div className="flex h-8 items-center rounded-[var(--r-md)] bg-[var(--bg-inset)] p-0.5" role="group" aria-label={t('graph.scope')}>
-        <button type="button" aria-pressed={prefs.mode === 'global'} onClick={() => changePref('mode', 'global')}
-          className={`h-7 rounded-[var(--r-sm)] px-2.5 text-[11.5px] ${prefs.mode === 'global' ? 'bg-[var(--bg-overlay)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-tertiary)]'}`}>
-          {t('graph.global')}
-        </button>
-        <button type="button" aria-pressed={prefs.mode === 'local'} disabled={!activeNoteId} onClick={() => changePref('mode', 'local')}
-          className={`h-7 rounded-[var(--r-sm)] px-2.5 text-[11.5px] disabled:opacity-40 ${prefs.mode === 'local' ? 'bg-[var(--bg-overlay)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-tertiary)]'}`}>
-          {t('graph.local')}
-        </button>
-      </div>
-      <label className="flex h-8 min-w-[150px] flex-1 items-center gap-2 rounded-[var(--r-md)] border border-[var(--border-default)] bg-[var(--bg-inset)] px-2.5 md:max-w-[320px]">
-        <Search size={13} className="shrink-0 text-[var(--text-quaternary)]"/>
-        <span className="sr-only">{t('graph.search_notes')}</span>
-        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('graph.search_notes')}
-          className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-[var(--text-quaternary)]"/>
-        {search && <button type="button" aria-label={t('common.clear')} onClick={() => setSearch('')}><X size={12}/></button>}
-      </label>
-      <div className="ml-auto flex items-center gap-1">
-        <Tooltip label={t('common.zoom_out')}><IconButton label={t('common.zoom_out')} size="sm" disabled={!data?.nodes.length} onClick={() => {
-          const state = stateRef.current; state.scale = Math.max(0.2, state.scale - 0.2); state.schedule?.()
-        }}><Minus size={14}/></IconButton></Tooltip>
-        <Tooltip label={t('graph.fit')}><IconButton label={t('graph.reset')} size="sm" disabled={!data?.nodes.length} onClick={fitGraph}><Maximize2 size={13}/></IconButton></Tooltip>
-        <Tooltip label={t('common.zoom_in')}><IconButton label={t('common.zoom_in')} size="sm" disabled={!data?.nodes.length} onClick={() => {
-          const state = stateRef.current; state.scale = Math.min(4, state.scale + 0.2); state.schedule?.()
-        }}><Plus size={14}/></IconButton></Tooltip>
-        <Tooltip label={t('graph.settings')}><IconButton label={t('graph.settings')} size="sm" aria-pressed={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}><Settings2 size={14}/></IconButton></Tooltip>
-        <Tooltip label={t('common.close')} combo="escape" side="left"><IconButton label={t('common.close')} size="sm" onClick={onClose} className="ml-1"><X size={16}/></IconButton></Tooltip>
-      </div>
-    </header>
+    {narrow ? (<>
+      <OverlayHeader variant="back" title={t('common.graph')} titleId={titleId} summary={summary} onClose={onClose}/>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-2">{controls}</div>
+    </>) : (<OverlayHeader title={t('common.graph')} titleId={titleId} summary={summary} onClose={onClose}>{controls}</OverlayHeader>)}
 
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <main className="relative min-w-0 flex-1">

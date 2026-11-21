@@ -14,13 +14,17 @@ interface PwaState {
   offlineStatus: 'idle' | 'preparing' | 'ready' | 'error'
   offlineCompleted: number
   offlineTotal: number
+  updateReady: boolean
+  updating: boolean
   install: () => Promise<void>
+  applyUpdate: () => Promise<void>
 }
 
 let installPrompt: InstallPromptEvent | null = null
 let initialized = false
 let updateToastShown = false
 let reloadForUpdate = false
+let applyingUpdate = false
 let serviceWorkerRegistration: ServiceWorkerRegistration | null = null
 let warmupRequested = false
 let warmupScheduled = false
@@ -32,6 +36,14 @@ export const usePwa = create<PwaState>((set) => ({
   offlineStatus: 'idle',
   offlineCompleted: 0,
   offlineTotal: 0,
+  updateReady: false,
+  updating: false,
+
+  async applyUpdate() {
+    const worker = serviceWorkerRegistration?.waiting
+    if (!worker) return
+    await applyUpdate(worker, set)
+  },
 
   async install() {
     const prompt = installPrompt
@@ -66,6 +78,7 @@ export function initializePwa(): void {
 
   navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage)
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    usePwa.setState({ updateReady: false })
     if (reloadForUpdate) location.reload()
   })
   window.addEventListener('online', scheduleOfflineWarmup)
@@ -96,7 +109,6 @@ async function registerServiceWorker(): Promise<void> {
         if (navigator.serviceWorker.controller) notifyUpdate(worker)
       })
     })
-
     const ready = await navigator.serviceWorker.ready
     serviceWorkerRegistration = ready
     ready.active?.postMessage({ type: 'GET_OFFLINE_CACHE_STATUS' })
@@ -156,6 +168,7 @@ function handleServiceWorkerMessage(event: MessageEvent): void {
 }
 
 function notifyUpdate(worker: ServiceWorker): void {
+  usePwa.setState({ updateReady: true })
   if (updateToastShown) return
   updateToastShown = true
   const durationMs = 30_000
@@ -167,7 +180,7 @@ function notifyUpdate(worker: ServiceWorker): void {
     action: {
       label: t('pwa.refresh_now'),
       run: () => {
-        void applyUpdate(worker)
+        void applyUpdate(worker, usePwa.setState)
       },
     },
   })
@@ -178,11 +191,30 @@ function notifyUpdate(worker: ServiceWorker): void {
   }, durationMs + 2_000)
 }
 
-async function applyUpdate(worker: ServiceWorker): Promise<void> {
+async function applyUpdate(worker: ServiceWorker, set: (partial: Partial<PwaState>) => void): Promise<void> {
+  if (applyingUpdate) return
+  applyingUpdate = true
+  set({ updating: true })
+  const dismiss = useUi.getState().dismissToast
+  const pendingId = useUi.getState().toast({
+    title: t('pwa.update_applying'),
+    description: t('pwa.update_applying_description'),
+    tone: 'default',
+    duration: 0,
+  })
+  const fallback = window.setTimeout(() => {
+    applyingUpdate = false
+    set({ updating: false })
+    dismiss(pendingId)
+  }, 15_000)
   const { useNotes } = await import('./notes')
   try {
     await useNotes.getState().flush({ immediate: true })
   } catch (error) {
+    window.clearTimeout(fallback)
+    applyingUpdate = false
+    set({ updating: false })
+    dismiss(pendingId)
     useUi.getState().toast({
       title: t('common.save_failed'),
       description: error instanceof Error ? error.message : String(error),

@@ -15,12 +15,32 @@ import { selectMarkdownTab, moveMarkdownTabFocus } from '../features/preview/mar
 const focusChanged = StateEffect.define<boolean>();
 const refresh = StateEffect.define<boolean>();
 
+/** 已测量的渲染块高度，按 HTML 签名作键。表格/图表可达上千像素，交给 CodeMirror 按行估会让切换时错位。 */
+const measuredBlockHeights = new Map<string, number>();
+
+/** 轻量签名，避免为缓存长期持有整段 HTML。 */
+function blockSign(html: string): string {
+    let hash = 0;
+    for (let i = 0; i < html.length; i += 1) hash = (hash * 31 + html.charCodeAt(i)) | 0;
+    return `${html.length}:${hash}`;
+}
+
+function rememberBlockHeight(html: string, height: number): void {
+    if (!(height > 0)) return;
+    if (measuredBlockHeights.size > 600) measuredBlockHeights.clear();
+    measuredBlockHeights.set(blockSign(html), height);
+}
+
 class RenderedBlock extends WidgetType {
     constructor(readonly block: MarkdownBlock, readonly source: string, readonly revision: number, readonly title: string) { super(); }
     eq(other: RenderedBlock) {
         return this.block.html === other.block.html && this.block.startLine === other.block.startLine
             && this.block.endLine === other.block.endLine && this.revision === other.revision && this.title === other.title
             && (!this.block.html.includes('data-embed-target') || this.source === other.source);
+    }
+    // 只回报真实测过的高度；按 HTML 长度猜会高估数倍（标签也算长度）。
+    get estimatedHeight(): number {
+        return measuredBlockHeights.get(blockSign(this.block.html)) ?? -1;
     }
     toDOM(view: EditorView) {
         const host = document.createElement('div');
@@ -29,7 +49,11 @@ class RenderedBlock extends WidgetType {
         host.innerHTML = this.block.html;
         host.title = t('workspace.live_preview_hint');
         let alive = true;
-        const observer = new ResizeObserver(() => view.requestMeasure());
+        const html = this.block.html;
+        const observer = new ResizeObserver(() => {
+            if (host.isConnected) rememberBlockHeight(html, host.getBoundingClientRect().height);
+            view.requestMeasure();
+        });
         observer.observe(host);
         cleanup.set(host, () => { alive = false; observer.disconnect(); });
         const settings = useSession.getState().settings.preview;

@@ -1,11 +1,13 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Eye, FileText, PanelLeft, PencilLine, UserRound } from 'lucide-react';
+import { flushSync } from 'react-dom';
+import { FileText, PanelLeft, UserRound } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { registerAll } from '../../lib/hotkeys';
 import { APP_SHORTCUTS } from '../../lib/shortcuts';
 import { useBreakpoint } from '../../lib/hooks';
 import { useBackLayer, requestBack } from '../../lib/back-stack';
 import { useEdgeSwipeBack, EDGE_SWIPE_EXIT_MS } from '../../lib/edge-swipe';
+import { isIosTouch } from '../../lib/platform';
 import { useSyncEngine } from '../../lib/sync';
 import { Drawer } from '../../components/overlay';
 import { IconButton } from '../../components/primitives';
@@ -134,23 +136,51 @@ function MobileShell() {
     const pane = useUi((s) => s.mobilePane);
     const setPane = useUi((s) => s.setMobilePane);
     const activeNoteId = useUi((s) => s.activeNoteId);
-    const notePane = pane === 'editor' || pane === 'preview';
+    const notePane = pane === 'note';
     const listLayer = useRef<HTMLDivElement>(null);
     const noteLayer = useRef<HTMLDivElement>(null);
     const [seenPane, setSeenPane] = useState(pane);
     const [holdingAccount, setHoldingAccount] = useState(false);
+    // 进入笔记前停在哪个页面：系统手势返回时回到它，而不是一律回列表。
+    const originPane = useRef<'list' | 'account'>('list');
     if (seenPane !== pane) {
         setSeenPane(pane);
-        if (notePane && seenPane === 'account')
-            setHoldingAccount(true);
-        else if (!notePane)
+        if (notePane) {
+            originPane.current = seenPane === 'account' ? 'account' : 'list';
+            if (seenPane === 'account')
+                setHoldingAccount(true);
+        }
+        else {
             setHoldingAccount(false);
+        }
     }
     useEffect(() => {
         if (pane === 'nav' || (!activeNoteId && notePane))
             setPane('list');
     }, [activeNoteId, notePane, pane, setPane]);
-    useBackLayer(notePane && Boolean(activeNoteId), 'mobile-note', () => setPane('list'));
+    // iOS 系统返回手势自己已经播过过渡，再跑一遍我们的 CSS 动画会出现第二个关闭动画。
+    const [instantClose, setInstantClose] = useState(false);
+    useEffect(() => {
+        if (!instantClose)
+            return;
+        let frame = requestAnimationFrame(() => {
+            frame = requestAnimationFrame(() => setInstantClose(false));
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [instantClose]);
+    const closeNotePane = (fromGesture: boolean) => {
+        if (!fromGesture) {
+            setPane('list');
+            return;
+        }
+        // popstate 晚于系统动画，同步提交可以少掉一帧旧状态的渲染。
+        flushSync(() => {
+            if (isIosTouch())
+                setInstantClose(true);
+            setPane(originPane.current);
+        });
+    };
+    useBackLayer(notePane && Boolean(activeNoteId), 'mobile-note', closeNotePane);
     const settleTimer = useRef(0);
     useEffect(() => () => window.clearTimeout(settleTimer.current), []);
     useEffect(() => {
@@ -171,7 +201,7 @@ function MobileShell() {
             element.style.opacity = '';
         }, 60);
     };
-    const swipe = useEdgeSwipeBack(notePane && Boolean(activeNoteId), requestBack, {
+    const swipe = useEdgeSwipeBack(!isIosTouch() && notePane && Boolean(activeNoteId), requestBack, {
         onDragChange: (dragging) => {
             if (!dragging) settleListLayer();
         },
@@ -196,12 +226,12 @@ function MobileShell() {
     });
     const tabs = [
         { id: 'list' as const, icon: <FileText size={19}/>, label: t("common.note") },
-        { id: 'editor' as const, icon: <PencilLine size={19}/>, label: t("common.edit") },
-        { id: 'preview' as const, icon: <Eye size={19}/>, label: t('mobile.view') },
-        { id: 'account' as const, icon: <UserRound size={19}/>, label: t('mobile.account') },
+        { id: 'account' as const, icon: <UserRound size={19}/>, label: t("mobile.account") },
     ];
-    return (<div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[var(--bg-base)] pt-[env(safe-area-inset-top)]">
-      <div className="relative min-h-0 flex-1">
+    // 笔记打开时仍归在「笔记」分区，返回时高亮不会变化。
+    const activeTab = notePane ? 'list' : pane;
+    return (<div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[var(--bg-base)] pt-[env(safe-area-inset-top)]" data-instant={instantClose || undefined}>
+      <div className={cn('relative min-h-0 flex-1', notePane && 'pb-[env(safe-area-inset-bottom)]')}>
         <div aria-hidden={pane !== 'account'} inert={pane !== 'account'} data-active={pane === 'account' || undefined} data-held={(holdingAccount && notePane) || undefined} className="mobile-pane-layer absolute inset-0">
           {(pane === 'account' || holdingAccount) && <MobileAccount />}
         </div>
@@ -213,11 +243,11 @@ function MobileShell() {
         </div>
       </div>
 
-      <nav aria-label={t("shell.mobile_navigation")} className="mobile-bottom-nav flex h-[calc(64px+env(safe-area-inset-bottom))] shrink-0 items-stretch justify-around border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] pb-[env(safe-area-inset-bottom)]">
-        {tabs.map((tab) => (<button key={tab.id} type="button" disabled={!activeNoteId && (tab.id === 'editor' || tab.id === 'preview')} aria-current={pane === tab.id ? 'page' : undefined} onClick={() => setPane(tab.id)} className={cn('flex min-w-0 flex-1 items-center justify-center text-[12px] transition-colors disabled:opacity-40', pane === tab.id ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]')}>
+      {!notePane && <nav aria-label={t("shell.mobile_navigation")} className="mobile-bottom-nav flex h-[calc(64px+env(safe-area-inset-bottom))] shrink-0 items-stretch justify-around border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] pb-[env(safe-area-inset-bottom)]">
+        {tabs.map((tab) => (<button key={tab.id} type="button" aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => setPane(tab.id)} className={cn('flex min-w-0 flex-1 items-center justify-center text-[12px] transition-colors', activeTab === tab.id ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]')}>
             <span className="mobile-tab-content">{tab.icon}<span>{tab.label}</span></span>
           </button>))}
-      </nav>
+      </nav>}
 
       <OverlayHost />
     </div>);

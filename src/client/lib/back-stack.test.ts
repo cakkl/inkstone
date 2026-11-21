@@ -62,4 +62,32 @@ describe('back stack', () => {
         requestBack();
         await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
     });
+
+    it('does not add an extra history entry when closing a layer', async () => {
+        // 截断前进栈只能在当前位置再 push 一条，会让「返回退出」的次数随关面板累加；
+        // 这条断言锁住「关层不额外写历史」。
+        const before = window.history.length;
+        const handler = vi.fn();
+        pushBackLayer('note', handler);
+        requestBack();
+        await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+        expect(window.history.length).toBe(before + 1);
+        expect(canGoBack()).toBe(false);
+    });
+
+    it('reports code-driven back as not from gesture', async () => {
+        const handler = vi.fn();
+        pushBackLayer('note', handler);
+        requestBack();
+        await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+        expect(handler).toHaveBeenCalledWith(false);
+    });
+
+    it('reports browser back as from gesture', async () => {
+        const handler = vi.fn();
+        pushBackLayer('note', handler);
+        window.history.back();
+        await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+        expect(handler).toHaveBeenCalledWith(true);
+    });
 });

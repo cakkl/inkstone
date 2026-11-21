@@ -45,7 +45,9 @@ interface UiState {
   workspaceSecondaryNoteId: string | null
   activeWorkspacePane: WorkspacePane
   workspacePaneLayouts: Record<WorkspacePane, EditorLayout>
-  mobilePane: 'nav' | 'list' | 'editor' | 'preview' | 'account'
+  mobilePane: 'nav' | 'list' | 'note' | 'account'
+  /** 笔记页的显示模式；底部导航不再区分编辑/查看。 */
+  noteView: 'edit' | 'read'
 
 
   view: ViewKind
@@ -87,6 +89,7 @@ interface UiState {
   openSearchList: () => void
   openExplorer: (folderId?: string | null, options?: { closeDrawer?: boolean }) => void
   setMobilePane: (pane: UiState['mobilePane']) => void
+  setNoteView: (view: UiState['noteView']) => void
   openView: (view: ViewKind, options?: { folderId?: string | null; tag?: string | null }) => void
   setSort: (sort: SortKey, order?: SortOrder) => void
   setDensity: (density: UiDensity) => void
@@ -272,7 +275,8 @@ function activatedNoteFields(state: UiState, id: string | null, pane: WorkspaceP
     recentNoteIds: id
       ? [id, ...state.recentNoteIds.filter((recentId) => recentId !== id)].slice(0, 24)
       : state.recentNoteIds,
-    mobilePane: id && revealOnMobile ? 'preview' : state.mobilePane,
+    mobilePane: id && revealOnMobile ? 'note' : state.mobilePane,
+    noteView: id && revealOnMobile ? 'read' : state.noteView,
   }
 }
 
@@ -311,6 +315,7 @@ export const useUi = create<UiState>((set, get) => ({
   toasts: [],
   lightbox: null,
   mobilePane: 'list',
+  noteView: 'edit',
   searchList: false,
   searchRequest: 0,
   ...loadPersisted(),
@@ -422,6 +427,7 @@ export const useUi = create<UiState>((set, get) => ({
     navDrawerOpen: options?.closeDrawer === false ? state.navDrawerOpen : false,
   })),
   setMobilePane: (mobilePane) => set({ mobilePane }),
+  setNoteView: (noteView) => set({ noteView }),
 
   openView: (view, options) =>
     set({
