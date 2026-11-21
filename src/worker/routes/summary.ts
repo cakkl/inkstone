@@ -14,6 +14,7 @@ import {
   toAiSummary,
   type SummaryRow,
 } from '../summary/service'
+import { acceptDraft, deleteDraft, listVersions, loadDraft, restoreVersion } from '../summary/drafts'
 import { createWorkersAiProvider } from '../summary/workers-ai'
 import { readUsage, remainingNeurons } from '../summary/usage'
 
@@ -51,10 +52,17 @@ async function summaryResponse(
   note: { id: string; title: string; content: string },
   row: SummaryRow | null,
 ): Promise<AiNoteSummaryResponse> {
-  const usage = await readUsage(db, userId)
-  const hash = row ? await summarySourceHash(note.title, note.content) : null
+  const [usage, hash, draft] = await Promise.all([
+    readUsage(db, userId),
+    row ? summarySourceHash(note.title, note.content) : Promise.resolve(null),
+    loadDraft(db, userId, note.id),
+  ])
   return {
     summary: row ? toAiSummary(row, hash ?? undefined) : null,
+    /** 待确认草稿：正文受影响时由自动更新生成，需用户确认后才替换正式摘要。 */
+    draft: draft
+      ? { text: draft.draft_text, operation: draft.operation, createdAt: draft.created_at }
+      : null,
     minimumCharacters: LIMITS.aiSummaryMinChars,
     characterCount: countSummaryCharacters(note.content),
     remainingNeurons: remainingNeurons(usage.neurons),
@@ -130,4 +138,54 @@ summaryRoutes.delete('/:id/summary', async (c) => {
     .bind(note.id, userId)
     .run()
   return c.json({ ok: true as const })
+})
+
+summaryRoutes.post('/:id/summary/draft/accept', async (c) => {
+  const userId = c.get('userId')
+  const note = await loadNoteForSummary(c.env.DB, userId, c.req.param('id'))
+  const result = await acceptDraft({
+    db: c.env.DB,
+    userId,
+    noteId: note.id,
+    currentSourceHash: await summarySourceHash(note.title, note.content),
+  })
+  if (!result.ok) throw ApiError.notFound('No draft to accept')
+  return c.json(await summaryResponse(c.env.DB, userId, note, await loadSummary(c.env.DB, userId, note.id)))
+})
+
+summaryRoutes.delete('/:id/summary/draft', async (c) => {
+  const userId = c.get('userId')
+  const note = await loadNoteForSummary(c.env.DB, userId, c.req.param('id'))
+  await deleteDraft(c.env.DB, userId, note.id)
+  return c.json(await summaryResponse(c.env.DB, userId, note, await loadSummary(c.env.DB, userId, note.id)))
+})
+
+summaryRoutes.get('/:id/summary/versions', async (c) => {
+  const userId = c.get('userId')
+  const note = await loadNoteForSummary(c.env.DB, userId, c.req.param('id'))
+  const versions = await listVersions(c.env.DB, userId, note.id)
+  return c.json({
+    versions: versions.map((version) => ({
+      id: version.id,
+      text: version.summary_text,
+      origin: version.summary_origin === 'user' ? 'user' : 'ai',
+      operation: version.operation,
+      createdAt: version.created_at,
+    })),
+  })
+})
+
+summaryRoutes.post('/:id/summary/versions/:versionId/restore', async (c) => {
+  const userId = c.get('userId')
+  const note = await loadNoteForSummary(c.env.DB, userId, c.req.param('id'))
+  const result = await restoreVersion({
+    db: c.env.DB,
+    userId,
+    noteId: note.id,
+    versionId: c.req.param('versionId'),
+    currentSourceHash: await summarySourceHash(note.title, note.content),
+    language: userLocale(c.get('user').settingsRaw),
+  })
+  if (!result.ok) throw ApiError.notFound('Version not found')
+  return c.json(await summaryResponse(c.env.DB, userId, note, await loadSummary(c.env.DB, userId, note.id)))
 })

@@ -21,7 +21,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, className }: {
   const [state, setState] = useState<AiNoteSummaryResponse | null>(null)
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState<'generate' | 'save' | 'delete' | null>(null)
+  const [busy, setBusy] = useState<'generate' | 'save' | 'delete' | 'accept' | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
   const loadedNoteRef = useRef<string | null>(null)
 
@@ -112,7 +112,34 @@ export function SummaryPanel({ noteId, updatedAt, disabled, className }: {
     }
   }, [busy, noteId, reportFailure, toast])
 
+  const acceptDraftText = useCallback(async () => {
+    if (busy) return
+    setBusy('accept')
+    try {
+      setState(await api.notes.acceptSummaryDraft(noteId))
+      toast({ title: t('summary.saved') })
+    } catch (error) {
+      reportFailure(error)
+    } finally {
+      setBusy(null)
+    }
+  }, [busy, noteId, reportFailure, toast])
+
+  const discardDraftText = useCallback(async () => {
+    if (busy) return
+    setBusy('accept')
+    try {
+      setState(await api.notes.discardSummaryDraft(noteId))
+      toast({ title: t('summary.deleted') })
+    } catch (error) {
+      reportFailure(error)
+    } finally {
+      setBusy(null)
+    }
+  }, [busy, noteId, reportFailure, toast])
+
   const summary = state?.summary ?? null
+  const pendingDraft = state?.draft ?? null
   const tooShort = state !== null && state.characterCount < state.minimumCharacters
   const quotaExhausted = state !== null && state.remainingNeurons === 0
 
@@ -146,9 +173,11 @@ export function SummaryPanel({ noteId, updatedAt, disabled, className }: {
           {loadState !== 'loading' && (
             <span className={cn(
               'min-w-0 truncate text-[11.5px] font-normal',
-              summary?.status === 'outdated' ? 'text-[var(--warning,#b45309)]' : 'text-[var(--text-quaternary)]',
+              pendingDraft
+                ? 'text-[var(--accent)]'
+                : summary?.status === 'outdated' ? 'text-[var(--warning,#b45309)]' : 'text-[var(--text-quaternary)]',
             )}>
-              {statusText}
+              {pendingDraft ? t('summary.draft_pending') : statusText}
             </span>
           )}
         </button>
@@ -201,6 +230,37 @@ export function SummaryPanel({ noteId, updatedAt, disabled, className }: {
               )}>
                 {summary ? summary.text : statusText}
               </p>
+              {pendingDraft && (
+                <div
+                  className="mt-2 rounded-[var(--r-md)] border border-[var(--border-subtle)] bg-[var(--bg-subtle)] p-2"
+                  data-summary-draft
+                >
+                  <div className="text-[11.5px] font-medium text-[var(--text-secondary)]">
+                    {t('summary.draft_title')}
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--text-primary)]">
+                    {pendingDraft.text}
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      loading={busy === 'accept'}
+                      disabled={disabled || busy !== null}
+                      onClick={() => void acceptDraftText()}
+                    >
+                      {t('summary.draft_accept')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={disabled || busy !== null}
+                      onClick={() => void discardDraftText()}
+                    >
+                      {t('summary.draft_discard')}
+                    </Button>
+                  </div>
+                </div>
+              )}
               {summary && (
                 <div className="mt-2 flex items-center gap-2">
                   <Button

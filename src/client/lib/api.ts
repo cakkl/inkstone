@@ -2,6 +2,7 @@ import { CLIENT_HEADER } from '@shared/constants'
 import type { MarkdownBackupManifest } from '@shared/backup-format'
 import type {
   AiNoteSummaryResponse,
+  AiSummaryVersion,
   AppLocale,
   Attachment,
   AttachmentWithUsage,
@@ -365,6 +366,14 @@ export const api = {
       request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, { method: 'PATCH', body: { text } }),
     deleteSummary: (id: string) =>
       request<{ ok: true }>(`/api/notes/${id}/summary`, { method: 'DELETE' }),
+    acceptSummaryDraft: (id: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/draft/accept`, { method: 'POST' }),
+    discardSummaryDraft: (id: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/draft`, { method: 'DELETE' }),
+    summaryVersions: (id: string, signal?: AbortSignal) =>
+      request<{ versions: AiSummaryVersion[] }>(`/api/notes/${id}/summary/versions`, { signal }),
+    restoreSummaryVersion: (id: string, versionId: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/versions/${versionId}/restore`, { method: 'POST' }),
   },
 
   folders: {

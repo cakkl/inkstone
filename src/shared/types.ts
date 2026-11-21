@@ -90,6 +90,8 @@ export interface AppearanceSettings {
   proseSize: number
   proseWidth: ProseWidth
   proseLineHeight: number
+  /** IANA 时区（如 Asia/Shanghai）。空串表示未知，服务端按 UTC 处理。 */
+  timezone: string
 }
 
 export interface EditorSettings {
@@ -173,8 +175,24 @@ export interface AiNoteSummary {
   updatedAt: number
 }
 
+export interface AiSummaryDraft {
+  text: string
+  operation: string
+  createdAt: number
+}
+
+export interface AiSummaryVersion {
+  id: string
+  text: string
+  origin: AiSummaryOrigin
+  operation: string
+  createdAt: number
+}
+
 export interface AiNoteSummaryResponse {
   summary: AiNoteSummary | null
+  /** 待确认草稿；接受前不影响正式摘要。 */
+  draft?: AiSummaryDraft | null
   /** 生成前需要达到的有效字符数；低于它只能靠手动生成。 */
   minimumCharacters: number
   /** 该笔记当前的有效字符数。 */

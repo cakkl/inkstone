@@ -55,7 +55,7 @@ describe('generateSummary', () => {
     const outcome = await generateSummary({ db, provider: providerReturning(), userId: 'u1', note, locale: 'zh-CN' })
 
     expect(outcome.ok).toBe(true)
-    if (!outcome.ok) return
+    if (!outcome.ok || outcome.target !== 'summary') throw new Error('expected a stored summary')
     expect(outcome.summary.origin).toBe('ai')
     expect(outcome.summary.status).toBe('current')
     expect(outcome.summary.text).toBe('这是一段测试摘要。')
@@ -70,6 +70,24 @@ describe('generateSummary', () => {
     const usage = statements.filter((entry) => entry.sql.includes('ai_summary_usage_daily'))
     // 一次读、一次写。
     expect(usage.length).toBe(2)
+  })
+
+  it('writes a draft when the request explicitly asks for one', async () => {
+    const { db, statements } = fakeDb()
+    const outcome = await generateSummary({
+      db,
+      provider: providerReturning(),
+      userId: 'u1',
+      note,
+      locale: 'zh-CN',
+      asDraft: true,
+    })
+
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok || outcome.target !== 'draft') throw new Error('expected a draft')
+    expect(outcome.draftText).toBe('这是一段测试摘要。')
+    expect(statements.some((entry) => entry.sql.includes('INSERT INTO note_summaries'))).toBe(false)
+    expect(statements.some((entry) => entry.sql.includes('INSERT INTO note_summary_drafts'))).toBe(true)
   })
 
   it('rejects a truncated response without writing a summary', async () => {

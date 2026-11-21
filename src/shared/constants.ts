@@ -42,6 +42,13 @@ export const LIMITS = {
   aiSummaryMaxChars: 4000,
   /** 每日 neurons 上限；免费额度为 10,000/天，留出 embedding 用量余量。 */
   aiSummaryDailyNeurons: 8_000,
+  /** 自动摘要的静默期：最后一次修改后至少等待这么久。 */
+  aiSummaryQuietHours: 4,
+  /** 自动摘要只在用户本地时间的这个区间内执行（含起点、不含终点）。 */
+  aiSummaryWindowStartHour: 1,
+  aiSummaryWindowEndHour: 6,
+  /** 积压超过该时长仍未执行的任务作废重排，避免长期不用后一次涌出。 */
+  aiSummaryQueueMaxAgeHours: 72,
 } as const
 
 export const ACCENTS: { name: AccentName; swatch: string; foreground: string }[] = [
@@ -74,6 +81,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
     proseSize: 16,
     proseWidth: 'normal',
     proseLineHeight: 1.65,
+    timezone: '',
   },
   editor: {
     fontSize: 15,
@@ -174,6 +182,7 @@ export function mergeSettings(partial: unknown): UserSettings {
     2.2,
     base.appearance.proseLineHeight,
   )
+  base.appearance.timezone = timezoneValue(appearance.timezone)
 
   base.editor.fontSize = integerInRange(editor.fontSize, 12, 22, base.editor.fontSize)
   base.editor.fontFamily = enumValue(editor.fontFamily, EDITOR_FONTS, base.editor.fontFamily)
@@ -268,6 +277,18 @@ function numberInRange(value: unknown, min: number, max: number, fallback: numbe
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.min(max, Math.max(min, value))
     : fallback
+}
+
+/** IANA 时区名；非法值一律当未知（空串），由服务端回落 UTC。 */
+function timezoneValue(value: unknown): string {
+  if (typeof value !== 'string' || !value || value.length > 64) return ''
+  if (!/^[A-Za-z][A-Za-z0-9_+\-/]*$/.test(value)) return ''
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0)
+    return value
+  } catch {
+    return ''
+  }
 }
 
 function integerInRange(value: unknown, min: number, max: number, fallback: number): number {

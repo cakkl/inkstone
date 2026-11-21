@@ -1,6 +1,7 @@
 import { LIMITS } from '@shared/constants'
 import type { AiNoteSummary } from '@shared/types'
 import { sha256Hex } from '../lib/encoding'
+import { pushVersion, saveDraft } from './drafts'
 import { SummaryProviderError, type SummaryLength, type SummaryProvider } from './provider'
 import { PROMPT_VERSION, SUMMARY_MODEL } from './workers-ai'
 import { readUsage, remainingNeurons, recordUsage, utcDateKey } from './usage'
@@ -56,10 +57,13 @@ export interface GenerateSummaryInput {
   note: { id: string; title: string; content: string }
   locale: string
   length?: SummaryLength
+  /** 用户手改过的摘要只能进草稿，不能直接覆盖。 */
+  asDraft?: boolean
 }
 
 export type GenerateSummaryOutcome =
-  | { ok: true; summary: AiNoteSummary; neurons: number }
+  | { ok: true; target: 'summary'; summary: AiNoteSummary; neurons: number }
+  | { ok: true; target: 'draft'; draftText: string; neurons: number }
   | { ok: false; code: SummaryErrorCode }
 
 export type SummaryErrorCode =
@@ -69,10 +73,7 @@ export type SummaryErrorCode =
   | 'truncated'
   | 'empty_result'
 
-/**
- * 生成并直接落库。第一版只有「首次生成」，草稿、历史版本、自动更新留待后续。
- * 模型不可用时不影响笔记本身：调用方把错误码变成 503 即可。
- */
+/** `asDraft` 或已有用户手改内容时只写草稿，避免覆盖人写的东西。 */
 export async function generateSummary(input: GenerateSummaryInput): Promise<GenerateSummaryOutcome> {
   const { db, provider, userId, note } = input
   if (!provider) return { ok: false, code: 'ai_unavailable' }
@@ -121,6 +122,33 @@ export async function generateSummary(input: GenerateSummaryInput): Promise<Gene
   if (!text) return { ok: false, code: 'empty_result' }
 
   const now = Date.now()
+  const existing = await loadSummary(db, userId, note.id)
+  const draftOnly = input.asDraft === true || existing?.summary_origin === 'user'
+
+  await recordUsage(db, {
+    userId,
+    model: result.model,
+    neurons: result.neurons,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    success: true,
+  }).catch(() => undefined)
+
+  if (draftOnly) {
+    await saveDraft(db, {
+      userId,
+      noteId: note.id,
+      text,
+      operation: 'update',
+      sourceHash,
+      baseUpdatedAt: existing?.updated_at ?? null,
+      model: result.model,
+      promptVersion: PROMPT_VERSION,
+    })
+    return { ok: true, target: 'draft', draftText: text, neurons: result.neurons }
+  }
+
+  if (existing) await pushVersion(db, userId, existing, 'generate')
   await db
     .prepare(
       `INSERT INTO note_summaries
@@ -153,17 +181,9 @@ export async function generateSummary(input: GenerateSummaryInput): Promise<Gene
     )
     .run()
 
-  await recordUsage(db, {
-    userId,
-    model: result.model,
-    neurons: result.neurons,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    success: true,
-  }).catch(() => undefined)
-
   return {
     ok: true,
+    target: 'summary',
     neurons: result.neurons,
     summary: {
       noteId: note.id,
@@ -178,7 +198,7 @@ export async function generateSummary(input: GenerateSummaryInput): Promise<Gene
   }
 }
 
-/** 用户手动编辑摘要：来源固定为 user，且以当前正文为基准避免立刻过期。 */
+/** 手改后来源固定为 user，且以当前正文为基准，避免立刻显示过期。 */
 export async function saveUserSummary(input: {
   db: D1Database
   userId: string
@@ -189,6 +209,7 @@ export async function saveUserSummary(input: {
   const existing = await loadSummary(input.db, input.userId, input.note.id)
   const sourceHash = await summarySourceHash(input.note.title, input.note.content)
   const now = Date.now()
+  if (existing) await pushVersion(input.db, input.userId, existing, 'manual')
   await input.db
     .prepare(
       `INSERT INTO note_summaries

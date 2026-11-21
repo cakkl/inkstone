@@ -580,6 +580,38 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
       )`,
     ],
   },
+  {
+    // 草稿与历史：用户改过的摘要不能被后台自动覆盖，只能先进草稿待确认。
+    version: 16,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS note_summary_drafts (
+        note_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        draft_text TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        base_updated_at INTEGER,
+        model TEXT,
+        prompt_version TEXT,
+        created_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_note_summary_drafts_user
+         ON note_summary_drafts(user_id, created_at DESC)`,
+      `CREATE TABLE IF NOT EXISTS note_summary_versions (
+        id TEXT PRIMARY KEY,
+        note_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        summary_text TEXT NOT NULL,
+        summary_origin TEXT NOT NULL,
+        summary_language TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_note_summary_versions_note
+         ON note_summary_versions(note_id, created_at DESC, id DESC)`,
+    ],
+  },
 ]
 
 const FTS_STATEMENT = `CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -631,6 +663,8 @@ const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   fts_index_queue: ['user_id', 'note_id', 'kind', 'created_at'],
   note_summaries: ['note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'summary_status', 'model', 'prompt_version', 'generated_at', 'updated_at'],
   ai_summary_usage_daily: ['user_id', 'date_utc', 'model', 'request_count', 'success_count', 'failure_count', 'input_tokens', 'output_tokens', 'neurons'],
+  note_summary_drafts: ['note_id', 'user_id', 'draft_text', 'operation', 'source_hash', 'base_updated_at', 'model', 'prompt_version', 'created_at'],
+  note_summary_versions: ['id', 'note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'operation', 'created_at'],
 } as const
 
 const REQUIRED_TABLES = [
@@ -665,6 +699,8 @@ const REQUIRED_TABLES = [
   'fts_index_queue',
   'note_summaries',
   'ai_summary_usage_daily',
+  'note_summary_drafts',
+  'note_summary_versions',
 ] as const
 
 const REQUIRED_INDEXES = [
@@ -712,6 +748,8 @@ const REQUIRED_INDEXES = [
   'idx_ai_index_queue_due',
   'idx_fts_index_queue_due',
   'idx_note_summaries_user',
+  'idx_note_summary_drafts_user',
+  'idx_note_summary_versions_note',
 ] as const
 
 
