@@ -1,5 +1,6 @@
 import { mergeSettings } from '@shared/constants'
 import type { Env } from '../env'
+import { resolveSummaryPolicy } from './policy'
 import { isSummaryDue, nextAvailableAt } from './quiet-window'
 import { generateSummary, summarySourceHash } from './service'
 import { createWorkersAiProvider } from './workers-ai'
@@ -25,9 +26,24 @@ interface QueueRow {
  */
 export async function enqueueSummary(
   db: D1Database,
-  input: { userId: string; noteId: string; sourceHash: string; now?: number },
+  input: {
+    userId: string
+    noteId: string
+    sourceHash: string
+    now?: number
+    settingsRaw?: string
+    hasSummary?: boolean
+  },
 ): Promise<void> {
   const now = input.now ?? Date.now()
+  const policy = await resolveSummaryPolicy({
+    db,
+    userId: input.userId,
+    noteId: input.noteId,
+    settingsRaw: input.settingsRaw ?? '{}',
+    hasSummary: input.hasSummary ?? false,
+  })
+  if (!policy.autoEligible) return
   await db
     .prepare(
       `INSERT INTO note_summary_queue
@@ -92,6 +108,18 @@ export async function drainSummaryQueue(env: Env, limit = 5, now = Date.now()): 
     const settings = userSettings(row.settings)
     const due = isSummaryDue({ now, lastEditAt: row.updated_at, timezone: settings.appearance.timezone })
     if (!due) continue
+    // 排队后开关可能被关掉：这里再确认一次，关闭就丢掉任务。
+    const policy = await resolveSummaryPolicy({
+      db: env.DB,
+      userId: row.user_id,
+      noteId: row.note_id,
+      settingsRaw: row.settings ?? '{}',
+      hasSummary: true,
+    })
+    if (!policy.autoEligible || !policy.visible) {
+      await dropQueuedSummary(env.DB, row.user_id, row.note_id)
+      continue
+    }
 
     // 正文又变了：等下一轮按新的 available_at 处理。
     const currentHash = await summarySourceHash(row.title, row.content)

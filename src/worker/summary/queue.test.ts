@@ -12,7 +12,7 @@ interface Statement {
  * 只记录 SQL 的最小 D1 stub：验证「保存后入队」的合并语义与出队时的筛选条件，
  * 不需要真实数据库或模型。
  */
-function fakeDb(rows: unknown[] = []) {
+function fakeDb(rows: unknown[] = [], instance = { enabled: true, allowAutoGenerate: true }) {
   const statements: Statement[] = []
   const db = {
     prepare(sql: string) {
@@ -21,7 +21,8 @@ function fakeDb(rows: unknown[] = []) {
           statements.push({ sql, args })
           return {
             run: async () => ({ success: true }),
-            first: async () => null,
+            first: async () =>
+              sql.includes('app_meta') ? { value: JSON.stringify(instance) } : null,
             all: async () => ({ results: rows }),
           }
         },
@@ -31,17 +32,26 @@ function fakeDb(rows: unknown[] = []) {
   return { db, statements }
 }
 
+const AUTO_ON = JSON.stringify({ aiSummary: { enabled: true, autoGenerate: true } })
+const AUTO_OFF = JSON.stringify({ aiSummary: { enabled: true, autoGenerate: false } })
+
 const SHANGHAI_NOON = Date.parse('2026-11-21T04:00:00Z') // 12:00 本地
 
 describe('enqueueSummary', () => {
   it('merges repeat edits into one row and resets the attempt counter', async () => {
     const { db, statements } = fakeDb()
-    await enqueueSummary(db, { userId: 'u1', noteId: 'n1', sourceHash: 'h1' })
-    const insert = statements[0]!
+    await enqueueSummary(db, { userId: 'u1', noteId: 'n1', sourceHash: 'h1', settingsRaw: AUTO_ON })
+    const insert = statements.find((entry) => entry.sql.includes('INSERT INTO note_summary_queue'))!
     expect(insert.sql).toContain('ON CONFLICT(note_id) DO UPDATE')
     expect(insert.sql).toContain('attempts = 0')
     // available_at = 当前 + 静默期
     expect(insert.args[3]).toBe(insert.args[4] as number + SUMMARY_QUIET_MS)
+  })
+
+  it('skips enqueue when the user turned auto generation off', async () => {
+    const { db, statements } = fakeDb()
+    await enqueueSummary(db, { userId: 'u1', noteId: 'n1', sourceHash: 'h1', settingsRaw: AUTO_OFF })
+    expect(statements.some((entry) => entry.sql.includes('INSERT INTO note_summary_queue'))).toBe(false)
   })
 })
 

@@ -29,6 +29,8 @@ export interface SiteInfo {
 
   realtimeEnabled: boolean
   version: string
+  /** 实例级 AI 摘要开关，登录时下发，前端据此隐藏/禁用入口。 */
+  aiSummary: { enabled: boolean; allowAutoGenerate: boolean }
 }
 
 export interface SessionInfo {
@@ -127,12 +129,22 @@ export interface SyncSettings {
   pollIntervalMs: number
 }
 
+/** 用户级 AI 摘要开关。`autoGenerate` 默认关闭，避免未经同意就把正文发给外部服务。 */
+export interface AiSummaryUserSettings {
+  enabled: boolean
+  autoGenerate: boolean
+}
+
+/** 单篇笔记策略：`disabled` 表示该笔记完全不使用 AI 摘要。 */
+export type AiSummaryNoteMode = 'inherit' | 'enabled' | 'disabled'
+
 export interface UserSettings {
   appearance: AppearanceSettings
   editor: EditorSettings
   preview: PreviewSettings
   backup: BackupSettings
   sync: SyncSettings
+  aiSummary: AiSummaryUserSettings
 }
 
 
@@ -199,6 +211,18 @@ export interface AiNoteSummaryResponse {
   characterCount: number
   /** 今日剩余可用额度（neurons），已用尽时为 0。 */
   remainingNeurons: number
+  /** 是否显示摘要区。关闭时整个区域不渲染。 */
+  visible: boolean
+  /** 是否允许 AI 生成（不影响手写）。 */
+  canGenerate: boolean
+  /** 是否允许自动生成（夜间排队）。 */
+  autoEligible: boolean
+  /** 单篇设置，用于笔记设置抽屉回显。 */
+  settings: {
+    summaryEnabled: boolean | null
+    aiMode: AiSummaryNoteMode
+    autoGenerate: boolean | null
+  }
 }
 
 export interface Folder {

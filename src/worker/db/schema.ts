@@ -632,6 +632,29 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
          ON note_summary_queue(status, available_at, note_id)`,
     ],
   },
+  {
+    // 单篇策略单独存：没有摘要的笔记也要能提前标记「不要 AI 摘要」。
+    version: 18,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS note_summary_settings (
+        note_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        auto_mode TEXT NOT NULL DEFAULT 'inherit',
+        updated_at INTEGER NOT NULL
+      )`,
+    ],
+  },
+  {
+    // 摘要本体与 AI 解耦：summary_enabled 为 NULL 表示「未设置」，按内容/自动生成推导；
+    // auto_mode 收窄为「这篇是否允许 AI 摘要」，auto_generate 控制单篇自动生成。
+    version: 19,
+    statements: [
+      `ALTER TABLE note_summary_settings ADD COLUMN summary_enabled INTEGER`,
+      `ALTER TABLE note_summary_settings ADD COLUMN auto_generate INTEGER`,
+      // 已有摘要的笔记回填为「开启」，避免升级后摘要突然消失。
+      `UPDATE note_summary_settings SET summary_enabled = 1 WHERE note_id IN (SELECT note_id FROM note_summaries)`,
+    ],
+  },
 ]
 
 const FTS_STATEMENT = `CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -686,6 +709,7 @@ const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   note_summary_drafts: ['note_id', 'user_id', 'draft_text', 'operation', 'source_hash', 'base_updated_at', 'model', 'prompt_version', 'created_at'],
   note_summary_versions: ['id', 'note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'operation', 'created_at'],
   note_summary_queue: ['note_id', 'user_id', 'source_hash', 'status', 'available_at', 'attempts', 'lease_until', 'last_error', 'created_at', 'updated_at'],
+  note_summary_settings: ['note_id', 'user_id', 'auto_mode', 'updated_at', 'summary_enabled', 'auto_generate'],
 } as const
 
 const REQUIRED_TABLES = [
@@ -723,6 +747,7 @@ const REQUIRED_TABLES = [
   'note_summary_drafts',
   'note_summary_versions',
   'note_summary_queue',
+  'note_summary_settings',
 ] as const
 
 const REQUIRED_INDEXES = [

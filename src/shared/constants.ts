@@ -112,6 +112,8 @@ export const DEFAULT_SETTINGS: UserSettings = {
     realtime: true,
     pollIntervalMs: 15_000,
   },
+  // 自动生成默认关闭：升级后不能未经同意就把正文发给外部 AI。
+  aiSummary: { enabled: true, autoGenerate: false },
 }
 
 export const BACKUP_INTERVALS: Record<string, number> = {
@@ -142,6 +144,7 @@ export function mergeSettings(partial: unknown): UserSettings {
   const preview = asRecord(src.preview)
   const backup = asRecord(src.backup)
   const sync = asRecord(src.sync)
+  const aiSummary = asRecord(src.aiSummary)
 
   base.appearance.theme = enumValue(appearance.theme, THEMES, base.appearance.theme)
   base.appearance.language = enumValue(
@@ -183,7 +186,6 @@ export function mergeSettings(partial: unknown): UserSettings {
     base.appearance.proseLineHeight,
   )
   base.appearance.timezone = timezoneValue(appearance.timezone)
-
   base.editor.fontSize = integerInRange(editor.fontSize, 12, 22, base.editor.fontSize)
   base.editor.fontFamily = enumValue(editor.fontFamily, EDITOR_FONTS, base.editor.fontFamily)
   base.editor.lineNumbers = booleanValue(editor.lineNumbers, base.editor.lineNumbers)
@@ -228,6 +230,9 @@ export function mergeSettings(partial: unknown): UserSettings {
     base.sync.pollIntervalMs,
   )
 
+  base.aiSummary.enabled = booleanValue(aiSummary.enabled, base.aiSummary.enabled)
+  base.aiSummary.autoGenerate = booleanValue(aiSummary.autoGenerate, base.aiSummary.autoGenerate)
+
   return base
 }
 
@@ -236,7 +241,7 @@ export function mergeSettingsPatch(current: unknown, patch: unknown): UserSettin
   const previous = asRecord(current)
   const incoming = asRecord(patch)
   const combined: Record<string, unknown> = { ...previous }
-  for (const section of ['appearance', 'editor', 'preview', 'backup', 'sync'] as const) {
+  for (const section of ['appearance', 'editor', 'preview', 'backup', 'sync', 'aiSummary'] as const) {
     combined[section] = {
       ...asRecord(previous[section]),
       ...asRecord(incoming[section]),
@@ -252,6 +257,7 @@ function cloneDefaultSettings(): UserSettings {
     preview: { ...DEFAULT_SETTINGS.preview },
     backup: { ...DEFAULT_SETTINGS.backup },
     sync: { ...DEFAULT_SETTINGS.sync },
+    aiSummary: { ...DEFAULT_SETTINGS.aiSummary },
   }
 }
 

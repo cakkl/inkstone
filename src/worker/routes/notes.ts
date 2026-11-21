@@ -571,6 +571,8 @@ notesRoutes.patch('/:id', async (c) => {
       noteId: id,
       sourceHash: await summarySourceHash(newTitle, newContent),
       now,
+      settingsRaw: c.get('user').settingsRaw,
+      hasSummary: false,
     }).catch(() => undefined)
   }
   const nextTags = contentChanged ? (derivedTags ?? extractTags(newContent)) : null

@@ -5,6 +5,7 @@ import { initializeDatabase } from './db/schema'
 import { drainAllFtsQueues } from './db/fts'
 import { drainAiIndexQueue } from './mcp/ai-search'
 import { drainSummaryQueue } from './summary/queue'
+import { drainPendingPurges } from './summary/drain-purge'
 import { createOAuthProvider, purgeExpiredOAuthData } from './mcp/oauth'
 import { purgeRevokedMcpApiKeys } from './mcp/api-keys'
 import { purgeExpiredMcpOperations } from './mcp/operations'
@@ -54,6 +55,7 @@ export default {
         purgeExpiredOAuthData(env),
         drainAiIndexQueue(env, 300),
         drainSummaryQueue(env, 5),
+        drainPendingPurges(env),
         drainAllFtsQueues(env.DB),
       ])
     })())
