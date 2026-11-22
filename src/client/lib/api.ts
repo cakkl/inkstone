@@ -358,9 +358,10 @@ export const api = {
       request<{ backlinks: Backlink[] }>(`/api/notes/${id}/backlinks`, { signal }),
     summary: (id: string, signal?: AbortSignal) =>
       request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, { signal }),
-    generateSummary: (id: string) =>
+    generateSummary: (id: string, options?: { mode?: 'fresh' | 'refine'; instruction?: string }) =>
       request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, {
         method: 'POST',
+        body: options ?? {},
         timeoutMs: 60_000,
       }),
     saveSummary: (id: string, text: string) =>
@@ -452,12 +453,14 @@ export const api = {
         publishBroadcast({ type: 'settings-changed', clientId: CLIENT_ID })
         return settings
       }),
-    aiSummary: () => request<{ enabled: boolean; allowAutoGenerate: boolean }>('/api/settings/ai-summary'),
+    aiSummary: () => request<{ enabled: boolean; allowAutoGenerate: boolean; queueDepth: number }>('/api/settings/ai-summary'),
     updateAiSummary: (body: { enabled?: boolean; allowAutoGenerate?: boolean }) =>
       request<{ enabled: boolean; allowAutoGenerate: boolean }>('/api/settings/ai-summary', {
         method: 'PUT',
         body,
       }),
+    backfillAiSummary: () =>
+      request<{ candidates: number; queued: number }>('/api/settings/ai-summary/backfill', { method: 'POST' }),
     stats: () => request<Record<string, number>>('/api/settings/stats'),
   },
 

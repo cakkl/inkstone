@@ -9,6 +9,7 @@ import { Button, IconButton } from '../../components/primitives'
 import { Textarea } from '../../components/form'
 import { useUi } from '../../store/ui'
 import { useSession } from '../../store/session'
+import { SummaryComposeDialog } from './SummaryComposeDialog'
 import { SummaryHistoryDialog } from './SummaryHistoryDialog'
 
 /** 摘要面板：inline 时作为正文顶部一块，否则为独立面板；编辑模式下可改但需保存。 */
@@ -39,7 +40,11 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
   /** null means untouched AI draft; a string holds the user's tweaks. */
   const [draftEdit, setDraftEdit] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [composerOpen, setComposerOpen] = useState(false)
   const loadedNoteRef = useRef<string | null>(null)
+  /** 切笔记后旧请求的响应必须丢弃，否则会把上一篇的摘要套到当前面板。 */
+  const noteRef = useRef(noteId)
+  noteRef.current = noteId
 
   useEffect(() => {
     if (!editable) {
@@ -103,14 +108,17 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
     toast({ title: message, tone: 'danger' })
   }, [toast])
 
-  const generate = useCallback(async () => {
+  const generate = useCallback(async (mode: 'fresh' | 'refine', text?: string) => {
     if (busy) return
+    const target = noteId
     setBusy('generate')
     try {
-      const next = await api.notes.generateSummary(noteId)
+      const next = await api.notes.generateSummary(target, { mode, instruction: text })
+      if (noteRef.current !== target) return
       setState(next)
       setOpen(true)
       setDraft(null)
+      setComposerOpen(false)
       toast({ title: t('summary.generated') })
     } catch (error) {
       reportFailure(error)
@@ -123,9 +131,12 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
     if (draft === null || busy) return
     const text = draft.trim()
     if (!text) return
+    const target = noteId
     setBusy('save')
     try {
-      setState(await api.notes.saveSummary(noteId, text))
+      const next = await api.notes.saveSummary(target, text)
+      if (noteRef.current !== target) return
+      setState(next)
       setDraft(null)
       toast({ title: t('summary.saved') })
     } catch (error) {
@@ -139,14 +150,20 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
     const pending = state?.draft
     if (!pending || busy) return
     const edited = draftEdit?.trim() ?? ''
+    const target = noteId
     setBusy('accept')
     try {
       if (edited && edited !== pending.text.trim()) {
         // Tweaked AI text becomes a user summary, so the stale draft is dropped too.
-        await api.notes.saveSummary(noteId, edited)
-        setState(await api.notes.discardSummaryDraft(noteId))
+        await api.notes.saveSummary(target, edited)
+        if (noteRef.current !== target) return
+        const next = await api.notes.discardSummaryDraft(target)
+        if (noteRef.current !== target) return
+        setState(next)
       } else {
-        setState(await api.notes.acceptSummaryDraft(noteId))
+        const next = await api.notes.acceptSummaryDraft(target)
+        if (noteRef.current !== target) return
+        setState(next)
       }
       setDraftEdit(null)
       setDraft(null)
@@ -160,9 +177,12 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
 
   const discardDraft = useCallback(async () => {
     if (busy) return
+    const target = noteId
     setBusy('accept')
     try {
-      setState(await api.notes.discardSummaryDraft(noteId))
+      const next = await api.notes.discardSummaryDraft(target)
+      if (noteRef.current !== target) return
+      setState(next)
       setDraftEdit(null)
       toast({ title: t('summary.deleted') })
     } catch (error) {
@@ -173,8 +193,11 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
   }, [busy, noteId, reportFailure, toast])
 
   const restoreVersion = useCallback(async (version: AiSummaryVersion) => {
+    const target = noteId
     try {
-      setState(await api.notes.restoreSummaryVersion(noteId, version.id))
+      const next = await api.notes.restoreSummaryVersion(target, version.id)
+      if (noteRef.current !== target) return
+      setState(next)
       setDraft(null)
       toast({ title: t('summary.history_restored') })
     } catch (error) {
@@ -191,8 +214,9 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
   const expanded = open
   const value = draft ?? summary?.text ?? ''
   const dirty = draft !== null && draft.trim() !== (summary?.text ?? '').trim()
-  const generateLabel = summary ? t('summary.regenerate') : t('summary.generate')
+  const generateLabel = t('summary.smart_generate')
   const generateDisabled = disabled || busy !== null || state.remainingNeurons === 0
+  const quotaHint = state.remainingNeurons === 0 ? t('summary.quota') : undefined
   const draftDirty = draftEdit !== null && pending !== null && draftEdit.trim() !== pending.text.trim()
   const emptyHint = !state.canGenerate
     ? t('summary.empty_manual_only')
@@ -228,7 +252,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
           summary?.status === 'outdated' ? 'text-[var(--warning)]' : 'text-[var(--text-quaternary)]',
         )}>
           {generating
-            ? <span className="summary-shimmer">{t('summary.generating')}</span>
+            ? (expanded ? null : <span className="summary-shimmer">{t('summary.generating')}</span>)
             : pending
               ? <span className="text-[var(--accent)]">{editable ? t('summary.draft_pending') : t('summary.draft_pending_readonly')}</span>
               : summary
@@ -258,7 +282,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
             label={generateLabel}
             size="sm"
             disabled={generateDisabled}
-            onClick={() => void generate()}
+            onClick={() => setComposerOpen(true)}
           >
             <Sparkles size={13} />
           </IconButton>
@@ -268,9 +292,9 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
             variant="ghost"
             className="shrink-0 whitespace-nowrap"
             icon={<Sparkles size={12} />}
-            loading={generating}
+            title={quotaHint}
             disabled={generateDisabled}
-            onClick={() => void generate()}
+            onClick={() => setComposerOpen(true)}
           >
             {generateLabel}
           </Button>
@@ -372,6 +396,14 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
           )}
         </div>
       )}
+
+      <SummaryComposeDialog
+        open={composerOpen}
+        onClose={() => setComposerOpen(false)}
+        hasSummary={Boolean(summary)}
+        disabled={generateDisabled}
+        onGenerate={generate}
+      />
 
       <SummaryHistoryDialog
         noteId={noteId}

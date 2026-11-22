@@ -282,11 +282,15 @@ export function createDemoBackend(): DemoBackend {
     return c.json({ ok: true as const, cursor: state.cursor })
   })
   app.get('/api/settings/ai-summary', (c) =>
-    c.json({ enabled: true, allowAutoGenerate: false }),
+    c.json({ enabled: true, allowAutoGenerate: false, queueDepth: 0 }),
   )
   app.put('/api/settings/ai-summary', async (c) => {
     await jsonBody(c.req.raw)
     return c.json({ enabled: true, allowAutoGenerate: false })
+  })
+  app.post('/api/settings/ai-summary/backfill', (c) => {
+    const missing = [...state.notes.values()].filter((note) => !note.deletedAt && !state.summaries.has(note.id)).length
+    return c.json({ candidates: missing, queued: missing })
   })
 
   app.get('/api/notes/:id/summary', (c) => c.json(demoSummaryResponse(state, c.req.param('id'))))
@@ -312,20 +316,22 @@ export function createDemoBackend(): DemoBackend {
     return c.json(demoSummaryResponse(state, id))
   })
 
-  app.post('/api/notes/:id/summary', (c) => {
+  app.post('/api/notes/:id/summary', async (c) => {
     const id = c.req.param('id')
     const note = state.notes.get(id)
     if (!note) return apiError(404, 'not_found', 'Note not found')
-    // 模拟 AI：直接截取正文开头，便于演示生成流程（不含额外文案）。
+    const body = await jsonBody(c.req.raw).catch(() => ({}) as Record<string, unknown>)
+    const refine = body.mode === 'refine'
+    const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : ''
+    const existing = state.summaries.get(id)
+    // 模拟 AI：截取正文开头；补充式再拼上旧摘要与用户要求，便于演示两种模式。
     const snippet = note.content.replace(/\s+/g, ' ').trim().slice(0, 120)
-    const generated: DemoSampleSummary = {
-      text: snippet + (note.content.length > 120 ? '…' : ''),
-      origin: 'ai',
-      language: 'zh-CN',
-      updatedAt: Date.now(),
-    }
-    // 与真实后端一致：手写摘要不被覆盖，生成结果先存成待确认草稿。
-    if (state.summaries.get(id)?.origin === 'user') state.summaryDrafts.set(id, generated)
+    const text = refine && existing
+      ? `${existing.text.slice(0, 40)}… → ${instruction || snippet}`
+      : snippet + (note.content.length > 120 ? '…' : '')
+    const generated: DemoSampleSummary = { text, origin: 'ai', language: 'zh-CN', updatedAt: Date.now() }
+    // 与真实后端一致：显式智能生成或手写摘要时只存草稿，不直接覆盖。
+    if (body.mode || existing?.origin === 'user') state.summaryDrafts.set(id, generated)
     else {
       pushDemoSummaryVersion(state, id)
       state.summaries.set(id, generated)
