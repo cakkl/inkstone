@@ -40,6 +40,26 @@ export function errorResponse(c: Context, err: unknown): Response {
     )
   }
   console.error('[inkstone] Unhandled error:', err)
+  // 部分运行时错误（如 D1 内部错误）没有 message，只靠上面一条日志无法定位，
+  // 这里额外输出结构化字段，含 cause。
+  console.error('[inkstone] Unhandled error detail:', describeUnknownError(err))
 
   return c.json({ error: { code: 'internal', message: "Internal server error" } }, 500)
+}
+
+function describeUnknownError(err: unknown): Record<string, unknown> {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+      cause: err.cause instanceof Error ? `${err.cause.name}: ${err.cause.message}` : err.cause,
+    }
+  }
+  if (typeof err === 'string') return { value: err }
+  try {
+    return { value: JSON.stringify(err) }
+  } catch {
+    return { value: String(err) }
+  }
 }

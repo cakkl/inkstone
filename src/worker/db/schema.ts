@@ -839,18 +839,18 @@ async function createSchema(db: D1Database): Promise<DatabaseState> {
     .prepare(`SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'users'`)
     .first<{ present: number }>()
   if (!initialized) {
-    await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)))
+    await withPhase('schema', () => db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement))))
   } else {
     // Existing installations must converge additively. CREATE IF NOT EXISTS
     // never rewrites user data; running table creation before indexes also
     // lets a partially initialized database recover missing feature tables.
-    await db.batch(TABLE_SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)))
+    await withPhase('tables', () => db.batch(TABLE_SCHEMA_STATEMENTS.map((statement) => db.prepare(statement))))
   }
-  await applyMigrations(db)
+  await withPhase('migrations', () => applyMigrations(db))
   if (initialized) {
-    await db.batch(INDEX_SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)))
+    await withPhase('indexes', () => db.batch(INDEX_SCHEMA_STATEMENTS.map((statement) => db.prepare(statement))))
   }
-  await assertFinalSchema(db)
+  await withPhase('verify', () => assertFinalSchema(db))
 
   let state: DatabaseState
   try {
@@ -865,12 +865,26 @@ async function createSchema(db: D1Database): Promise<DatabaseState> {
     state = { ftsEnabled: false }
   }
   if (state.ftsEnabled) {
-    await setMeta(db, DATABASE_STATE_KEY, JSON.stringify({
+    await withPhase('state', () => setMeta(db, DATABASE_STATE_KEY, JSON.stringify({
       schema: schemaFingerprint(),
       ftsEnabled: true,
-    }))
+    })))
   }
   return state
+}
+
+/**
+ * D1 偶发抛出不带 message 的错误（线上日志只剩堆栈，无法判断卡在哪一步），
+ * 因此给每个初始化阶段包一层，空 message 时补上阶段名；有 message 的原样抛出。
+ */
+async function withPhase<T>(phase: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (error) {
+    if (error instanceof Error && error.message) throw error
+    const reason = error instanceof Error ? error.name : String(error)
+    throw new Error(`[db-init:${phase}] ${reason || 'unknown error'}`, { cause: error })
+  }
 }
 
 async function upgradeFtsIdentifiers(db: D1Database): Promise<void> {
@@ -912,8 +926,27 @@ async function applyMigrations(db: D1Database): Promise<void> {
       db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)`)
         .bind(migration.version, Date.now()),
     )
-    await db.batch(statements)
+    try {
+      await db.batch(statements)
+    } catch (error) {
+      // 多个 isolate 冷启动会并发跑同一批迁移。D1 的 batch 是事务，重放时
+      // `ALTER TABLE ... ADD COLUMN` 会报 duplicate column（CREATE 都是 IF NOT EXISTS）。
+      // 这种错误说明另一个实例已经把改动落地，补写版本记录即可，不能让整站 500。
+      if (!isAlreadyAppliedError(error)) throw error
+      await db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)`)
+        .bind(migration.version, Date.now())
+        .run()
+    }
   }
+}
+
+const ALREADY_APPLIED_PATTERN = /duplicate column name|already exists/i
+
+function isAlreadyAppliedError(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string' ? error : ''
+  return ALREADY_APPLIED_PATTERN.test(message)
 }
 
 async function readStoredDatabaseState(db: D1Database): Promise<DatabaseState | null> {
