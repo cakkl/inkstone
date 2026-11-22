@@ -6,6 +6,10 @@ export interface SummaryRequest {
   content: string
   language: string
   length: SummaryLength
+  /** 传入时走补充式：以旧摘要为口径参考，正文为准。 */
+  previousSummary?: string
+  /** 用户在智能生成里写的补充要求。 */
+  instruction?: string
 }
 
 export interface SummaryResult {

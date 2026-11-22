@@ -9,6 +9,7 @@ import {
   type MarkdownBackupManifest,
   type MarkdownBackupNoteEntry,
   type MarkdownBackupNoteState,
+  type MarkdownBackupSummaryEntry,
   MARKDOWN_BACKUP_FORMAT,
   MARKDOWN_BACKUP_VERSION,
 } from '@shared/backup-format'
@@ -211,6 +212,7 @@ export async function buildSnapshot(env: Env, userId: string): Promise<Snapshot>
     'text/plain; charset=utf-8',
     'readme',
   )
+  const summaryEntries = await loadBackupSummaries(env.DB, userId, new Set(noteEntries.map((entry) => entry.id)))
   const manifest: MarkdownBackupManifest = {
     format: MARKDOWN_BACKUP_FORMAT,
     version: MARKDOWN_BACKUP_VERSION,
@@ -219,6 +221,7 @@ export async function buildSnapshot(env: Env, userId: string): Promise<Snapshot>
     snapshot: stamp,
     notes: noteEntries,
     attachments: attachmentEntries,
+    ...(summaryEntries.length ? { summaries: summaryEntries } : {}),
   }
   if (!parseMarkdownBackupManifest(manifest)) {
     throw new Error('The backup contains metadata that cannot be restored safely')
@@ -351,7 +354,36 @@ export async function buildJsonExport(env: Env, userId: string): Promise<Uint8Ar
     afterId = page.results.at(-1)!.id
     if (page.results.length < NOTE_PAGE_SIZE) break
   }
-  append('],"attachments":[]}')
+  append('],"attachments":[],"summaries":')
+  const summaries = await env.DB.prepare(
+    `SELECT note_id, summary_text, summary_origin, summary_language, model,
+            summary_evolved, refine_count, source_hash, generated_at, updated_at
+       FROM note_summaries WHERE user_id = ?1 ORDER BY note_id ASC`,
+  ).bind(userId).all<{
+    note_id: string
+    summary_text: string
+    summary_origin: string
+    summary_language: string
+    model: string | null
+    summary_evolved: number
+    refine_count: number
+    source_hash: string
+    generated_at: number | null
+    updated_at: number
+  }>()
+  append(JSON.stringify(summaries.results.map((row) => ({
+    noteId: row.note_id,
+    text: row.summary_text,
+    origin: row.summary_origin === 'user' ? 'user' : 'ai',
+    language: row.summary_language || 'zh-CN',
+    model: row.model,
+    evolved: row.summary_evolved === 1,
+    refineCount: row.refine_count,
+    sourceHash: row.source_hash,
+    generatedAt: row.generated_at ?? row.updated_at,
+    updatedAt: row.updated_at,
+  }))))
+  append('}')
 
   const bytes = new Uint8Array(byteLength)
   let offset = 0
@@ -525,6 +557,54 @@ function validateAttachmentRow(row: AttachmentSnapshotRow): void {
   }
   if (!/^[0-9a-f]{64}$/.test(row.sha256)) throw new Error(`Invalid attachment checksum: ${row.filename}`)
   if (!isAttachmentObjectStorage(row.storage)) throw new Error(`Invalid attachment storage type: ${row.filename}`)
+}
+
+/** 摘要随笔记一起备份：只带上确实出现在本次快照里的笔记。 */
+async function loadBackupSummaries(
+  db: D1Database,
+  userId: string,
+  noteIds: ReadonlySet<string>,
+): Promise<MarkdownBackupSummaryEntry[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT note_id, summary_text, summary_origin, summary_language, model,
+              summary_evolved, refine_count, source_hash, generated_at, updated_at
+         FROM note_summaries WHERE user_id = ?1`,
+    )
+    .bind(userId)
+    .all<{
+      note_id: string
+      summary_text: string
+      summary_origin: string
+      summary_language: string
+      model: string | null
+      summary_evolved: number
+      refine_count: number
+      source_hash: string
+      generated_at: number | null
+      updated_at: number
+    }>()
+
+  const entries: MarkdownBackupSummaryEntry[] = []
+  for (const row of results) {
+    if (!noteIds.has(row.note_id)) continue
+    if (!row.summary_text || row.summary_text.length > LIMITS.aiSummaryMaxChars) continue
+    const generatedAt = row.generated_at ?? row.updated_at
+    if (!Number.isSafeInteger(generatedAt) || generatedAt <= 0) continue
+    entries.push({
+      noteId: row.note_id,
+      text: row.summary_text,
+      origin: row.summary_origin === 'user' ? 'user' : 'ai',
+      language: row.summary_language || 'zh-CN',
+      model: row.model,
+      evolved: row.summary_evolved === 1,
+      refineCount: row.refine_count,
+      sourceHash: row.source_hash,
+      generatedAt,
+      updatedAt: row.updated_at,
+    })
+  }
+  return entries.sort((a, b) => a.noteId.localeCompare(b.noteId))
 }
 
 async function staticFile(

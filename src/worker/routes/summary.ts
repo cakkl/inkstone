@@ -67,6 +67,7 @@ async function summaryResponse(
     draft: draft
       ? { text: draft.draft_text, operation: draft.operation, createdAt: draft.created_at }
       : null,
+    draftMode: draft ? (draft.operation === 'refine' ? 'refine' : 'fresh') : undefined,
     minimumCharacters: LIMITS.aiSummaryMinChars,
     characterCount: countSummaryCharacters(note.content),
     remainingNeurons: remainingNeurons(usage.neurons),
@@ -147,12 +148,21 @@ summaryRoutes.post('/:id/summary', async (c) => {
 
   const ai = c.env.AI
   const provider = ai ? createWorkersAiProvider(ai) : null
+  const body = await readJson<{ mode?: string; instruction?: string }>(c, JSON_BODY_LIMITS.small).catch(
+    (): { mode?: string; instruction?: string } => ({}),
+  )
+  const mode = body.mode === 'refine' ? 'refine' : body.mode === 'fresh' ? 'fresh' : undefined
+  const instruction = typeof body.instruction === 'string' ? body.instruction.trim().slice(0, 500) : undefined
   const outcome = await generateSummary({
     db: c.env.DB,
     provider,
     userId,
     note,
     locale: userLocale(c.get('user').settingsRaw),
+    // 智能生成才需要确认：已有摘要时不直接覆盖，先给草稿。
+    asDraft: Boolean(mode) && Boolean(existing),
+    mode,
+    instruction,
   })
 
   if (!outcome.ok) {

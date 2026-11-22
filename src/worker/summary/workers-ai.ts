@@ -1,5 +1,5 @@
 import type { Env } from '../env'
-import { buildSystemPrompt, buildUserPrompt, LENGTH_PRESETS, PROMPT_VERSION } from './prompts'
+import { buildRefineSystemPrompt, buildRefineUserPrompt, buildSystemPrompt, buildUserPrompt, LENGTH_PRESETS, PROMPT_VERSION } from './prompts'
 import { SummaryProviderError, type SummaryProvider, type SummaryRequest, type SummaryResult } from './provider'
 
 /** 实测最佳性价比：中文摘要准确、保留数字与路径，2 秒左右返回。 */
@@ -23,10 +23,21 @@ export function createWorkersAiProvider(ai: NonNullable<Env['AI']>): SummaryProv
     async generate(request: SummaryRequest): Promise<SummaryResult> {
       const preset = LENGTH_PRESETS[request.length]
       const content = request.content.slice(0, SUMMARY_INPUT_MAX_CHARS)
+      const refine = Boolean(request.previousSummary)
       const result = await ai.run(SUMMARY_MODEL, {
         messages: [
-          { role: 'system', content: buildSystemPrompt(request.language, request.length) },
-          { role: 'user', content: buildUserPrompt(request.title, content) },
+          {
+            role: 'system',
+            content: refine
+              ? buildRefineSystemPrompt(request.language, request.length)
+              : buildSystemPrompt(request.language, request.length),
+          },
+          {
+            role: 'user',
+            content: refine
+              ? buildRefineUserPrompt(request.title, content, request.previousSummary!, request.instruction)
+              : buildUserPrompt(request.title, content),
+          },
         ],
         max_tokens: preset.maxTokens,
         temperature: 0.2,

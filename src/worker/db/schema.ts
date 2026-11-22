@@ -654,8 +654,17 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
       // 已有摘要的笔记回填为「开启」，避免升级后摘要突然消失。
       `UPDATE note_summary_settings SET summary_enabled = 1 WHERE note_id IN (SELECT note_id FROM note_summaries)`,
     ],
-  },
-]
+  },  {
+    // 谱系与 origin 分离：evolved=1 表示这份摘要含用户演化出来的口径，自动生成要接着补充而非推翻。
+    version: 20,
+    statements: [
+      `ALTER TABLE note_summaries ADD COLUMN summary_evolved INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE note_summaries ADD COLUMN refine_count INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE note_summaries ADD COLUMN last_fresh_at INTEGER`,
+      // 手写摘要天然是用户口径。
+      `UPDATE note_summaries SET summary_evolved = 1 WHERE summary_origin = 'user'`,
+    ],
+  },]
 
 const FTS_STATEMENT = `CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
   note_id,
@@ -704,7 +713,7 @@ const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ai_note_embeddings: ['user_id', 'note_id', 'model', 'vector', 'indexed_at'],
   ai_index_queue: ['user_id', 'note_id', 'kind', 'created_at'],
   fts_index_queue: ['user_id', 'note_id', 'kind', 'created_at'],
-  note_summaries: ['note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'summary_status', 'model', 'prompt_version', 'generated_at', 'updated_at'],
+  note_summaries: ['note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'summary_status', 'model', 'prompt_version', 'generated_at', 'updated_at', 'summary_evolved', 'refine_count', 'last_fresh_at'],
   ai_summary_usage_daily: ['user_id', 'date_utc', 'model', 'request_count', 'success_count', 'failure_count', 'input_tokens', 'output_tokens', 'neurons'],
   note_summary_drafts: ['note_id', 'user_id', 'draft_text', 'operation', 'source_hash', 'base_updated_at', 'model', 'prompt_version', 'created_at'],
   note_summary_versions: ['id', 'note_id', 'user_id', 'summary_text', 'summary_origin', 'summary_language', 'source_hash', 'operation', 'created_at'],

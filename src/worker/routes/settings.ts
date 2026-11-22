@@ -1,11 +1,12 @@
 import { Hono } from 'hono'
-import { mergeSettings, mergeSettingsPatch } from '@shared/constants'
+import { LIMITS, mergeSettings, mergeSettingsPatch } from '@shared/constants'
 import type { UserSettings } from '@shared/types'
 import type { AppBindings } from '../env'
 import { ApiError } from '../lib/errors'
 import { commitChange } from '../lib/notify'
 import { getAiSummarySettings, setAiSummarySettings, setAllowRegistration } from '../lib/instance-settings'
 import { clearAiSummaryPurge, markAiSummaryPurge } from '../summary/purge'
+import { backfillMissingSummaries, clearUserQueue } from '../summary/queue'
 import { requireCurrentPassword } from '../lib/reauth'
 import { JSON_BODY_LIMITS, readJson } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
@@ -34,7 +35,31 @@ settingsRoutes.get('/', (c) => {
 })
 
 settingsRoutes.get('/ai-summary', async (c) => {
-  return c.json(await getAiSummarySettings(c.env.DB))
+  const userId = c.get('userId')
+  const [instance, depth] = await Promise.all([
+    getAiSummarySettings(c.env.DB),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM note_summary_queue WHERE user_id = ?1 AND status = 'pending'`,
+    )
+      .bind(userId)
+      .first<{ count: number }>(),
+  ])
+  return c.json({ ...instance, queueDepth: depth?.count ?? 0 })
+})
+
+/** 只补「还没有摘要」的笔记；已有摘要（含过期）保持不动。 */
+settingsRoutes.post('/ai-summary/backfill', async (c) => {
+  const user = c.get('user')
+  const settings = mergeSettings(parse(user.settingsRaw))
+  if (!settings.aiSummary.enabled || !settings.aiSummary.autoGenerate) {
+    throw ApiError.badRequest('Enable automatic summaries first')
+  }
+  const result = await backfillMissingSummaries(c.env.DB, {
+    userId: user.id,
+    settingsRaw: user.settingsRaw,
+    minCharacters: LIMITS.aiSummaryMinChars,
+  })
+  return c.json(result)
 })
 
 settingsRoutes.put('/ai-summary', async (c) => {
@@ -75,6 +100,10 @@ settingsRoutes.put('/', async (c) => {
         await markAiSummaryPurge(c.env.DB, userId, Date.now()).catch(() => undefined)
       } else if (!previous.aiSummary.enabled && merged.aiSummary.enabled) {
         await clearAiSummaryPurge(c.env.DB, userId).catch(() => undefined)
+      }
+      // 关掉自动生成就别再排队了：否则积压会留到下次开启。
+      if (previous.aiSummary.autoGenerate && !merged.aiSummary.autoGenerate) {
+        await clearUserQueue(c.env.DB, userId).catch(() => undefined)
       }
       await commitChange(c, 'settings', userId, 'upsert')
       return c.json(merged)

@@ -54,7 +54,8 @@ export default {
         purgeRevokedMcpApiKeys(env.DB),
         purgeExpiredOAuthData(env),
         drainAiIndexQueue(env, 300),
-        drainSummaryQueue(env, 5),
+        // 每小时最多 25 篇；额度耗尽会在内部 break，不会烧超。
+        drainSummaryQueue(env, 25),
         drainPendingPurges(env),
         drainAllFtsQueues(env.DB),
       ])

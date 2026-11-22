@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { generateSummary, saveUserSummary, toAiSummary, type SummaryRow } from './service'
+import { generateSummary, REFINE_DRIFT_MAX, resolveMode, saveUserSummary, toAiSummary, type SummaryRow } from './service'
 import type { SummaryProvider } from './provider'
 
 interface Statement {
@@ -65,7 +65,10 @@ describe('generateSummary', () => {
     expect(insert).toBeDefined()
     expect(insert!.args[0]).toBe('n1')
     expect(insert!.args[2]).toBe('这是一段测试摘要。')
-    expect(insert!.args[3]).toBe('ai')
+    expect(insert!.args[3]).toBe('zh-CN')
+    // 全新生成：不带用户口径，也不累计补充次数。
+    expect(insert!.args[8]).toBe(0)
+    expect(insert!.args[9]).toBe(0)
 
     const usage = statements.filter((entry) => entry.sql.includes('ai_summary_usage_daily'))
     // 一次读、一次写。
@@ -146,6 +149,9 @@ describe('toAiSummary', () => {
     model: 'm',
     generated_at: 1,
     updated_at: 2,
+    summary_evolved: 0,
+    refine_count: 0,
+    last_fresh_at: null,
   }
 
   it('keeps current when the source hash matches', () => {
@@ -160,5 +166,48 @@ describe('toAiSummary', () => {
     const mapped = toAiSummary({ ...row, summary_origin: 'user' })
     expect(mapped.origin).toBe('user')
     expect(mapped.language).toBe('zh-CN')
+  })
+})
+
+describe('resolveMode', () => {
+  const base = {
+    note_id: 'n1',
+    summary_text: '旧摘要',
+    summary_origin: 'ai',
+    summary_status: 'current',
+    summary_language: 'zh-CN',
+    source_hash: 'h',
+    model: 'm',
+    generated_at: 1,
+    updated_at: 2,
+    summary_evolved: 1,
+    refine_count: 1,
+    last_fresh_at: 1_000,
+  } satisfies SummaryRow
+
+  it('starts fresh when there is no summary', () => {
+    expect(resolveMode(undefined, null, 5_000)).toBe('fresh')
+  })
+
+  it('refines while the summary carries user lineage', () => {
+    expect(resolveMode(undefined, base, 5_000)).toBe('refine')
+  })
+
+  it('rewrites when the summary never had user lineage', () => {
+    expect(resolveMode(undefined, { ...base, summary_evolved: 0 }, 5_000)).toBe('fresh')
+  })
+
+  it('falls back to fresh after too many refines', () => {
+    expect(resolveMode(undefined, { ...base, refine_count: REFINE_DRIFT_MAX }, 5_000)).toBe('fresh')
+  })
+
+  it('falls back to fresh when the last rewrite is old', () => {
+    const stale = REFINE_DRIFT_MAX * 24 * 60 * 60 * 1000
+    expect(resolveMode(undefined, base, base.last_fresh_at! + stale * 10)).toBe('fresh')
+  })
+
+  it('honours an explicit request', () => {
+    expect(resolveMode('refine', { ...base, refine_count: 99 }, 5_000)).toBe('refine')
+    expect(resolveMode('fresh', base, 5_000)).toBe('fresh')
   })
 })

@@ -162,12 +162,14 @@ export async function acceptDraft(input: {
 
   const now = Date.now()
   const origin: AiSummaryOrigin = existing?.summary_origin === 'user' ? 'user' : 'ai'
+  const refined = draft.operation === 'refine'
   await input.db
     .prepare(
       `INSERT INTO note_summaries
          (note_id, user_id, summary_text, summary_origin, summary_language, source_hash,
-          summary_status, model, prompt_version, generated_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'current', ?7, ?8, ?9, ?9)
+          summary_status, model, prompt_version, generated_at, updated_at,
+          summary_evolved, refine_count, last_fresh_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'current', ?7, ?8, ?9, ?9, ?10, ?11, ?12)
        ON CONFLICT(note_id) DO UPDATE SET
          summary_text = excluded.summary_text,
          summary_origin = excluded.summary_origin,
@@ -175,7 +177,10 @@ export async function acceptDraft(input: {
          summary_status = 'current',
          model = excluded.model,
          generated_at = excluded.generated_at,
-         updated_at = excluded.updated_at
+         updated_at = excluded.updated_at,
+         summary_evolved = excluded.summary_evolved,
+         refine_count = excluded.refine_count,
+         last_fresh_at = excluded.last_fresh_at
        WHERE note_summaries.user_id = excluded.user_id`,
     )
     .bind(
@@ -188,6 +193,9 @@ export async function acceptDraft(input: {
       draft.model,
       null,
       now,
+      refined ? 1 : 0,
+      refined ? (existing?.refine_count ?? 0) + 1 : 0,
+      refined ? (existing?.last_fresh_at ?? null) : now,
     )
     .run()
 
@@ -211,12 +219,14 @@ export async function restoreVersion(input: {
   if (existing) await pushVersion(input.db, input.userId, existing, 'restore')
 
   const now = Date.now()
+  const evolved = version.summary_origin === 'user' ? 1 : (existing?.summary_evolved ?? 0)
   await input.db
     .prepare(
       `INSERT INTO note_summaries
          (note_id, user_id, summary_text, summary_origin, summary_language, source_hash,
-          summary_status, model, prompt_version, generated_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'current', NULL, NULL, ?7, ?7)
+          summary_status, model, prompt_version, generated_at, updated_at,
+          summary_evolved, refine_count, last_fresh_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'current', NULL, NULL, ?7, ?7, ?8, 0, ?9)
        ON CONFLICT(note_id) DO UPDATE SET
          summary_text = excluded.summary_text,
          summary_origin = excluded.summary_origin,
@@ -225,7 +235,9 @@ export async function restoreVersion(input: {
          summary_status = 'current',
          model = NULL,
          generated_at = excluded.generated_at,
-         updated_at = excluded.updated_at
+         updated_at = excluded.updated_at,
+         summary_evolved = excluded.summary_evolved,
+         refine_count = 0
        WHERE note_summaries.user_id = excluded.user_id`,
     )
     .bind(
@@ -236,6 +248,8 @@ export async function restoreVersion(input: {
       version.summary_language || input.language,
       input.currentSourceHash,
       now,
+      evolved,
+      existing?.last_fresh_at ?? null,
     )
     .run()
   return { ok: true }

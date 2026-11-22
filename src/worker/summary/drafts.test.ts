@@ -45,6 +45,9 @@ const summaryRow: SummaryRow = {
   model: 'm',
   generated_at: 1,
   updated_at: 2,
+  summary_evolved: 0,
+  refine_count: 0,
+  last_fresh_at: null,
 }
 
 describe('summary drafts', () => {

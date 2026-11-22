@@ -70,6 +70,73 @@ export async function dropQueuedSummary(db: D1Database, userId: string, noteId: 
     .run()
 }
 
+/** 关闭自动生成时立刻清空积压，不必等 drain 逐条丢弃。 */
+export async function clearUserQueue(db: D1Database, userId: string): Promise<number> {
+  const result = await db
+    .prepare(`DELETE FROM note_summary_queue WHERE user_id = ?1 AND status = 'pending'`)
+    .bind(userId)
+    .run()
+  return result.meta.changes ?? 0
+}
+
+/** 只给「还没有摘要」的笔记补投任务，已有摘要（含过期）不动。 */
+export async function backfillMissingSummaries(
+  db: D1Database,
+  input: { userId: string; settingsRaw: string; minCharacters: number; now?: number },
+): Promise<{ candidates: number; queued: number }> {
+  const now = input.now ?? Date.now()
+  const { results } = await db.prepare(
+    `SELECT n.id, n.title, n.content, n.updated_at
+       FROM notes n
+       LEFT JOIN note_summary_settings s ON s.note_id = n.id AND s.user_id = n.user_id
+       LEFT JOIN note_summaries m ON m.note_id = n.id AND m.user_id = n.user_id
+      WHERE n.user_id = ?1
+        AND n.deleted_at IS NULL
+        AND m.note_id IS NULL
+        AND (s.summary_enabled IS NULL OR s.summary_enabled = 1)
+        AND (s.auto_mode IS NULL OR s.auto_mode != 'disabled')
+        AND (s.auto_generate IS NULL OR s.auto_generate = 1)
+        AND length(n.content) >= ?2
+      ORDER BY n.updated_at DESC
+      LIMIT 2000`,
+  )
+    .bind(input.userId, input.minCharacters)
+    .all<{ id: string; title: string; content: string; updated_at: number }>()
+
+  if (results.length === 0) return { candidates: 0, queued: 0 }
+
+  const statements = await Promise.all(
+    results.map(async (row, index) =>
+      db
+        .prepare(
+          `INSERT INTO note_summary_queue
+             (note_id, user_id, source_hash, status, available_at, attempts, created_at, updated_at)
+           VALUES (?1, ?2, ?3, 'pending', ?4, 0, ?5, ?5)
+           ON CONFLICT(note_id) DO UPDATE SET
+             source_hash = excluded.source_hash,
+             status = 'pending',
+             available_at = excluded.available_at,
+             attempts = 0,
+             lease_until = NULL,
+             last_error = NULL,
+             updated_at = excluded.updated_at
+           WHERE note_summary_queue.user_id = excluded.user_id`,
+        )
+        .bind(
+          row.id,
+          input.userId,
+          await summarySourceHash(row.title, row.content),
+          // 摊开排期，避免整点一起涌入。
+          nextAvailableAt(row.updated_at) + index * 30_000,
+          now,
+        ),
+    ),
+  )
+
+  await db.batch(statements.map((statement) => statement))
+  return { candidates: results.length, queued: statements.length }
+}
+
 /** 脏 JSON 不能让整轮中断：解析失败按默认设置处理。 */
 function userSettings(settingsRaw: string | null) {
   try {

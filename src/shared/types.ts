@@ -193,6 +193,9 @@ export interface AiSummaryDraft {
   createdAt: number
 }
 
+/** 智能生成的两种模式：补充现有摘要，或完全重写。 */
+export type SummaryDraftMode = 'fresh' | 'refine'
+
 export interface AiSummaryVersion {
   id: string
   text: string
@@ -205,6 +208,8 @@ export interface AiNoteSummaryResponse {
   summary: AiNoteSummary | null
   /** 待确认草稿；接受前不影响正式摘要。 */
   draft?: AiSummaryDraft | null
+  /** 草稿是「在旧摘要上补充」还是「全新生成」，用于界面提示。 */
+  draftMode?: SummaryDraftMode
   /** 生成前需要达到的有效字符数；低于它只能靠手动生成。 */
   minimumCharacters: number
   /** 该笔记当前的有效字符数。 */
@@ -553,6 +558,20 @@ export interface PublicNote {
 }
 
 
+export interface ExportSummary {
+  noteId: string
+  text: string
+  origin: 'user' | 'ai'
+  language: string
+  model: string | null
+  /** 含用户演化出的口径，导入后自动生成会继续补充。 */
+  evolved: boolean
+  refineCount: number
+  sourceHash: string
+  generatedAt: number
+  updatedAt: number
+}
+
 export interface ExportBundle {
 
   format: string
@@ -564,6 +583,8 @@ export interface ExportBundle {
   notes: Note[]
 
   attachments: ExportAttachment[]
+  /** 可选：旧导出没有该字段。 */
+  summaries?: ExportSummary[]
 }
 
 export interface ExportAttachment {
