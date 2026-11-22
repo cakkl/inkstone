@@ -11,6 +11,8 @@ import { useSession } from '../../store/session'
 export function AiSummarySettings() {
   const settings = useSession((s) => s.settings)
   const updateSettings = useSession((s) => s.updateSettings)
+  /** 实例禁了自动摘要时，用户侧这两个开关没有任何效果，直接不列出。 */
+  const instanceAuto = useSession((s) => s.site?.aiSummary.allowAutoGenerate ?? true)
   const toast = useUi((s) => s.toast)
   const [queueDepth, setQueueDepth] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
@@ -70,31 +72,35 @@ export function AiSummarySettings() {
             label={t('settings.ai_summary_enabled')}
           />
         </SettingRow>
-        <SettingRow
-          title={t('settings.ai_summary_auto')}
-          description={t('settings.ai_summary_auto_hint')}
-        >
-          <Switch
-            checked={settings.aiSummary.autoGenerate}
-            onChange={(autoGenerate) => updateSettings({ aiSummary: { autoGenerate } })}
-            label={t('settings.ai_summary_auto')}
-          />
-        </SettingRow>
-        <SettingRow
-          title={t('settings.ai_summary_backfill')}
-          description={t('settings.ai_summary_backfill_hint')}
-        >
-          <div className="flex items-center gap-2">
-            {queueDepth !== null && queueDepth > 0 && (
-              <span className="text-[11.5px] text-[var(--text-quaternary)]">
-                {t('settings.ai_summary_queue_depth', { value0: queueDepth })}
-              </span>
-            )}
-            <Button size="sm" variant="secondary" loading={busy} disabled={!autoOn || busy} onClick={() => void backfill()}>
-              {t('settings.ai_summary_backfill_action')}
-            </Button>
-          </div>
-        </SettingRow>
+        {instanceAuto && (
+          <>
+            <SettingRow
+              title={t('settings.ai_summary_auto')}
+              description={t('settings.ai_summary_auto_hint')}
+            >
+              <Switch
+                checked={settings.aiSummary.autoGenerate}
+                onChange={(autoGenerate) => updateSettings({ aiSummary: { autoGenerate } })}
+                label={t('settings.ai_summary_auto')}
+              />
+            </SettingRow>
+            <SettingRow
+              title={t('settings.ai_summary_backfill')}
+              description={t('settings.ai_summary_backfill_hint')}
+            >
+              <div className="flex items-center gap-2">
+                {queueDepth !== null && queueDepth > 0 && (
+                  <span className="text-[11.5px] text-[var(--text-quaternary)]">
+                    {t('settings.ai_summary_queue_depth', { value0: queueDepth })}
+                  </span>
+                )}
+                <Button size="sm" variant="secondary" loading={busy} disabled={!autoOn || busy} onClick={() => void backfill()}>
+                  {t('settings.ai_summary_backfill_action')}
+                </Button>
+              </div>
+            </SettingRow>
+          </>
+        )}
       </section>
     </div>
   )

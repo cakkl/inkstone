@@ -17,7 +17,7 @@ import {
 import { acceptDraft, deleteDraft, listVersions, loadDraft, restoreVersion } from '../summary/drafts'
 import { resolveSummaryPolicy, setNoteFlags } from '../summary/policy'
 import { purgeAiSummary, purgeNoteSummary } from '../summary/purge'
-import { dropQueuedSummary } from '../summary/queue'
+import { dropQueuedSummary, hasQueuedSummary } from '../summary/queue'
 import { createWorkersAiProvider } from '../summary/workers-ai'
 import { readUsage, remainingNeurons } from '../summary/usage'
 
@@ -56,11 +56,12 @@ async function summaryResponse(
   row: SummaryRow | null,
   settingsRaw: string,
 ): Promise<AiNoteSummaryResponse> {
-  const [usage, hash, draft, policy] = await Promise.all([
+  const [usage, hash, draft, policy, queued] = await Promise.all([
     readUsage(db, userId),
     row ? summarySourceHash(note.title, note.content) : Promise.resolve(null),
     loadDraft(db, userId, note.id),
     resolveSummaryPolicy({ db, userId, noteId: note.id, settingsRaw, hasSummary: Boolean(row) }),
+    hasQueuedSummary(db, userId, note.id),
   ])
   return {
     summary: row ? toAiSummary(row, hash ?? undefined) : null,
@@ -74,6 +75,7 @@ async function summaryResponse(
     visible: policy.visible,
     canGenerate: policy.canGenerate,
     autoEligible: policy.autoEligible,
+    queued,
     settings: {
       summaryEnabled: policy.summaryEnabled,
       aiMode: policy.aiMode,
@@ -178,6 +180,11 @@ summaryRoutes.post('/:id/summary', async (c) => {
     }
   }
 
+  // 已经按当前正文生成好了，排着的自动任务没有意义：撤销它，别在夜里再生成一遍。
+  if (outcome.target === 'summary') {
+    await dropQueuedSummary(c.env.DB, userId, note.id)
+  }
+
   return c.json(await summaryResponse(c.env.DB, userId, note, await loadSummary(c.env.DB, userId, note.id), c.get('user').settingsRaw))
 })
 
@@ -221,6 +228,7 @@ summaryRoutes.post('/:id/summary/draft/accept', async (c) => {
     currentSourceHash: await summarySourceHash(note.title, note.content),
   })
   if (!result.ok) throw ApiError.notFound('No draft to accept')
+  await dropQueuedSummary(c.env.DB, userId, note.id)
   return c.json(await summaryResponse(c.env.DB, userId, note, await loadSummary(c.env.DB, userId, note.id), c.get('user').settingsRaw))
 })
 

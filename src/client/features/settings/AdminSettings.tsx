@@ -3,6 +3,8 @@ import { api } from '../../lib/api'
 import { t } from '../../lib/i18n'
 import { SettingRow, Switch } from '../../components/form'
 import { useUi } from '../../store/ui'
+import { useSession } from '../../store/session'
+import { SettingsLoading } from './SettingsLoading'
 
 interface InstanceSettings {
   enabled: boolean
@@ -26,7 +28,11 @@ export function AdminSettings() {
     if (busy) return
     setBusy(true)
     try {
-      setInstance(await api.settings.updateAiSummary(patch))
+      const next = await api.settings.updateAiSummary(patch)
+      setInstance(next)
+      // 站点信息里也存了实例开关，不同步的话关闭后当前会话仍然看得到相关设置项。
+      const site = useSession.getState().site
+      if (site) useSession.setState({ site: { ...site, aiSummary: next } })
       toast({ title: t('summary.saved') })
     } catch {
       toast({ title: t('summary.failed'), tone: 'danger' })
@@ -35,7 +41,8 @@ export function AdminSettings() {
     }
   }
 
-  if (!instance) return null
+  // 数据未到时给骨架：直接 return null 会在 lazy 加载完、接口未回之间留一大块空白。
+  if (!instance) return <SettingsLoading rows={2} />
 
   return (
     <div className="space-y-4">
@@ -53,16 +60,19 @@ export function AdminSettings() {
             label={t('settings.ai_summary_instance_enabled')}
           />
         </SettingRow>
-        <SettingRow
-          title={t('settings.ai_summary_instance_auto')}
-          description={t('settings.ai_summary_instance_auto_hint')}
-        >
-          <Switch
-            checked={instance.allowAutoGenerate}
-            onChange={(allowAutoGenerate) => void save({ allowAutoGenerate })}
-            label={t('settings.ai_summary_instance_auto')}
-          />
-        </SettingRow>
+        {/* The child switch is meaningless while the instance switch is off. */}
+        {instance.enabled && (
+          <SettingRow
+            title={t('settings.ai_summary_instance_auto')}
+            description={t('settings.ai_summary_instance_auto_hint')}
+          >
+            <Switch
+              checked={instance.allowAutoGenerate}
+              onChange={(allowAutoGenerate) => void save({ allowAutoGenerate })}
+              label={t('settings.ai_summary_instance_auto')}
+            />
+          </SettingRow>
+        )}
       </section>
     </div>
   )

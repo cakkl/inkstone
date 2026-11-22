@@ -70,6 +70,18 @@ export async function dropQueuedSummary(db: D1Database, userId: string, noteId: 
     .run()
 }
 
+/** 这篇笔记是否真的在队列里（待执行或执行中），用于区分「今晚会生成」与「只是开了自动生成」。 */
+export async function hasQueuedSummary(db: D1Database, userId: string, noteId: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS present FROM note_summary_queue
+        WHERE note_id = ?1 AND user_id = ?2 AND status IN ('pending', 'running')`,
+    )
+    .bind(noteId, userId)
+    .first<{ present: number }>()
+  return Boolean(row?.present)
+}
+
 /** 关闭自动生成时立刻清空积压，不必等 drain 逐条丢弃。 */
 export async function clearUserQueue(db: D1Database, userId: string): Promise<number> {
   const result = await db
@@ -193,6 +205,16 @@ export async function drainSummaryQueue(env: Env, limit = 5, now = Date.now()): 
 
     // 正文又变了：等下一轮按新的 available_at 处理。
     const currentHash = await summarySourceHash(row.title, row.content)
+    // 同一份正文已有摘要（手动生成、采用草稿、恢复历史都算）：再跑只会重复烧额度
+    // 并覆盖用户刚确认的版本。
+    const existing = await env.DB
+      .prepare(`SELECT source_hash FROM note_summaries WHERE note_id = ?1 AND user_id = ?2`)
+      .bind(row.note_id, row.user_id)
+      .first<{ source_hash: string }>()
+    if (existing?.source_hash === row.source_hash) {
+      await dropQueuedSummary(env.DB, row.user_id, row.note_id)
+      continue
+    }
     if (currentHash !== row.source_hash) {
       await enqueueSummary(env.DB, {
         userId: row.user_id,

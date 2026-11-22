@@ -873,10 +873,7 @@ async function createSchema(db: D1Database): Promise<DatabaseState> {
   return state
 }
 
-/**
- * D1 偶发抛出不带 message 的错误（线上日志只剩堆栈，无法判断卡在哪一步），
- * 因此给每个初始化阶段包一层，空 message 时补上阶段名；有 message 的原样抛出。
- */
+/** D1 偶发抛出无 message 的错误（线上只剩堆栈），这里补上阶段名；有 message 的原样抛出。 */
 async function withPhase<T>(phase: string, run: () => Promise<T>): Promise<T> {
   try {
     return await run()
@@ -929,9 +926,8 @@ async function applyMigrations(db: D1Database): Promise<void> {
     try {
       await db.batch(statements)
     } catch (error) {
-      // 多个 isolate 冷启动会并发跑同一批迁移。D1 的 batch 是事务，重放时
-      // `ALTER TABLE ... ADD COLUMN` 会报 duplicate column（CREATE 都是 IF NOT EXISTS）。
-      // 这种错误说明另一个实例已经把改动落地，补写版本记录即可，不能让整站 500。
+      // 多个 isolate 冷启动会并发跑同一批迁移；D1 的 batch 是事务，重放时 ALTER 会报
+      // duplicate column。这说明另一个实例已落地，补写版本记录即可，不能让整站 500。
       if (!isAlreadyAppliedError(error)) throw error
       await db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)`)
         .bind(migration.version, Date.now())

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { drainSummaryQueue, enqueueSummary, SUMMARY_MAX_ATTEMPTS } from './queue'
+import { drainSummaryQueue, enqueueSummary, hasQueuedSummary, SUMMARY_MAX_ATTEMPTS } from './queue'
+import { summarySourceHash } from './service'
 import { isSummaryDue, SUMMARY_QUIET_MS } from './quiet-window'
 import type { Env } from '../env'
 
@@ -12,7 +13,11 @@ interface Statement {
  * 只记录 SQL 的最小 D1 stub：验证「保存后入队」的合并语义与出队时的筛选条件，
  * 不需要真实数据库或模型。
  */
-function fakeDb(rows: unknown[] = [], instance = { enabled: true, allowAutoGenerate: true }) {
+function fakeDb(
+  rows: unknown[] = [],
+  instance = { enabled: true, allowAutoGenerate: true },
+  summary: { source_hash: string } | null = null,
+) {
   const statements: Statement[] = []
   const db = {
     prepare(sql: string) {
@@ -22,7 +27,11 @@ function fakeDb(rows: unknown[] = [], instance = { enabled: true, allowAutoGener
           return {
             run: async () => ({ success: true }),
             first: async () =>
-              sql.includes('app_meta') ? { value: JSON.stringify(instance) } : null,
+              sql.includes('app_meta')
+                ? { value: JSON.stringify(instance) }
+                : sql.includes('note_summaries')
+                  ? summary
+                  : null,
             all: async () => ({ results: rows }),
           }
         },
@@ -84,5 +93,63 @@ describe('drainSummaryQueue', () => {
   it('exposes a bounded retry count', () => {
     expect(SUMMARY_MAX_ATTEMPTS).toBeGreaterThan(1)
     expect(SUMMARY_MAX_ATTEMPTS).toBeLessThanOrEqual(5)
+  })
+
+  it('drops the task when the same body already has a summary', async () => {
+    // 02:00 Asia/Shanghai，静默期已满：本可执行，但这份正文已有摘要。
+    const night = Date.parse('2026-11-20T18:00:00Z')
+    const title = 'Python 编译安装'
+    const content = '正文内容'
+    const hash = await summarySourceHash(title, content)
+    const { db, statements } = fakeDb(
+      [{
+        note_id: 'n1',
+        user_id: 'u1',
+        source_hash: hash,
+        attempts: 0,
+        settings: JSON.stringify({
+          aiSummary: { enabled: true, autoGenerate: true },
+          appearance: { timezone: 'Asia/Shanghai' },
+        }),
+        title,
+        content,
+        updated_at: night - 10 * 3_600_000,
+      }],
+      { enabled: true, allowAutoGenerate: true },
+      { source_hash: hash },
+    )
+    const processed = await drainSummaryQueue({ DB: db, AI: { run: async () => ({}) } } as unknown as Env, 5, night)
+    expect(processed).toBe(0)
+    expect(statements.some((entry) => entry.sql.includes("SET status = 'running'"))).toBe(false)
+    expect(statements.some((entry) => entry.sql.includes('DELETE FROM note_summary_queue'))).toBe(true)
+  })
+})
+
+describe('hasQueuedSummary', () => {
+  function presenceDb(row: { present: number } | null) {
+    const statements: Statement[] = []
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            statements.push({ sql, args })
+            return { first: async () => row }
+          },
+        }
+      },
+    } as unknown as D1Database
+    return { db, statements }
+  }
+
+  it('只在待执行或执行中才算已排队', async () => {
+    const { db, statements } = presenceDb({ present: 1 })
+    expect(await hasQueuedSummary(db, 'u1', 'n1')).toBe(true)
+    expect(statements[0]!.sql).toContain("status IN ('pending', 'running')")
+    expect(statements[0]!.args).toEqual(['n1', 'u1'])
+  })
+
+  it('没有任务记录时返回 false，前端据此不再承诺今晚生成', async () => {
+    const { db } = presenceDb(null)
+    expect(await hasQueuedSummary(db, 'u1', 'n1')).toBe(false)
   })
 })

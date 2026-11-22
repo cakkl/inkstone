@@ -1097,7 +1097,7 @@ export const EN_US_MESSAGES = {
   "summary.empty": "No summary yet. Generating one sends this note's text to the configured AI provider.",
   "summary.empty_manual_only": "Write a summary for this note.",
   "summary.empty_can_generate": "Write a summary, or use the top-right button to let AI draft one.",
-  "summary.empty_auto": "Will be generated tonight. You can also generate it now.",
+  "summary.empty_auto": "Queued for tonight's automatic run. You can also generate it now.",
   "summary.offline": "Generating a summary needs a connection. Try again when you are online.",
   "summary.generating": "Generating summary…",
   "summary.draft_question": "Replace with this version?",
