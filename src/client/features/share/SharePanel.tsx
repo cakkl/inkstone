@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, ExternalLink, Eye, Globe, Link2, Lock, Trash2 } from 'lucide-react';
+import { Check, Copy, ExternalLink, Eye, Globe, Link2, Lock, Sparkles, Trash2 } from 'lucide-react';
 import { LIMITS } from '@shared/constants';
 import type { NoteSummary, ShareInfo } from '@shared/types';
 import { api, ApiError } from '../../lib/api';
@@ -37,6 +37,7 @@ export function SharePanel({ onClose, targetNote, onChanged }: {
     const [reload, setReload] = useState(0);
     const [password, setPassword] = useState('');
     const [usePassword, setUsePassword] = useState(false);
+    const [includeSummary, setIncludeSummary] = useState(true);
     const [expiry, setExpiry] = useState('0');
     const [busy, setBusy] = useState<'save' | 'revoke' | null>(null);
     const [copied, setCopied] = useState(false);
@@ -63,6 +64,7 @@ export function SharePanel({ onClose, targetNote, onChanged }: {
         setLoadError(null);
         setPassword('');
         setUsePassword(false);
+        setIncludeSummary(true);
         setExpiry('0');
         setCopied(false);
         window.clearTimeout(copiedTimer.current);
@@ -73,6 +75,7 @@ export function SharePanel({ onClose, targetNote, onChanged }: {
                 return;
             setShare(res.share);
             setUsePassword(Boolean(res.share?.hasPassword));
+            setIncludeSummary(res.share ? res.share.includeSummary : true);
             setExpiry(res.share?.expiresAt ? KEEP_CURRENT_EXPIRY : '0');
         })
             .catch((error) => {
@@ -114,6 +117,7 @@ export function SharePanel({ onClose, targetNote, onChanged }: {
             const res = await api.share.create(noteId, {
                 password: usePassword ? password || undefined : null,
                 expiresIn: expiresInForSelection(expiry),
+                includeSummary,
             });
             if (mutationEpoch.current !== epoch || noteIdRef.current !== noteId)
                 return;
@@ -161,6 +165,7 @@ export function SharePanel({ onClose, targetNote, onChanged }: {
                 return;
             setShare(null);
             setUsePassword(false);
+            setIncludeSummary(true);
             setExpiry('0');
             await api.share.remove(noteId);
             if (mutationEpoch.current !== epoch || noteIdRef.current !== noteId)
@@ -248,6 +253,15 @@ export function SharePanel({ onClose, targetNote, onChanged }: {
               <p className="mt-0.5 text-[11.5px] text-[var(--text-tertiary)]">{t("share.require_a_passcode_to_view_this_note")}</p>
             </div>
             <Switch checked={usePassword} disabled={busy !== null} onChange={setUsePassword} label={t("common.access_passcode")}/>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 py-1">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-[13px] font-medium">
+                <Sparkles size={12} className="text-[var(--text-tertiary)]"/>{t("share.include_summary")}</div>
+              <p className="mt-0.5 text-[11.5px] text-[var(--text-tertiary)]">{t("share.include_summary_hint")}</p>
+            </div>
+            <Switch checked={includeSummary} disabled={busy !== null} onChange={setIncludeSummary} label={t("share.include_summary")}/>
           </div>
 
           {usePassword && (<Field label={t("share.passcode")} hint={share?.hasPassword ? t("share.leave_blank_to_keep_the_current_passcode") : undefined}>

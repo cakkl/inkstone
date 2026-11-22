@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyRound, Lock, Moon, Sun } from 'lucide-react';
+import { KeyRound, Lock, Moon, Sparkles, Sun } from 'lucide-react';
 import { LIMITS } from '@shared/constants';
 import type { PublicNote } from '@shared/types';
 import { api, ApiError } from '../../lib/api';
@@ -240,6 +240,16 @@ export function SharePage({ slug }: {
                   </>)}
               </div>
             </header>
+
+            {note.summary && (
+              <section className="mb-7 rounded-[var(--r-lg)] border border-[var(--border-subtle)] bg-[var(--bg-inset)] px-4 py-3">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
+                  <Sparkles size={11}/>
+                  {t("summary.title")}
+                </div>
+                <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--text-secondary)]">{note.summary.text}</p>
+              </section>
+            )}
 
             <div ref={hostRef} onClick={onContentClick} onKeyDown={onContentKeyDown} className="ink-prose" style={{ maxWidth: 'none' }} dangerouslySetInnerHTML={htmlObj}/>
 

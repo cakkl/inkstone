@@ -87,6 +87,7 @@ export function createDemoState(): DemoState {
     expiresAt: null,
     views: 12,
     createdAt: now - 86_400_000 * 4,
+    includeSummary: true,
   }
 
   return {
@@ -113,7 +114,12 @@ export function createDemoState(): DemoState {
     shares: new Map([[welcomeShare.noteId, { info: welcomeShare, password: null }]]),
     backupTargets: new Map(),
     backupRuns: [],
-    summaries: new Map(),
+    summaries: new Map([[notes[0]!.id, {
+      text: notes[0]!.excerpt || notes[0]!.content.replace(/\s+/g, ' ').slice(0, 120),
+      origin: 'ai',
+      language: 'zh-CN',
+      updatedAt: now - 3_600_000,
+    }]]),
     summaryDrafts: new Map(),
     summaryVersions: new Map(),
     summarySettings: new Map(),

@@ -655,6 +655,13 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigration[] = [
       `UPDATE note_summary_settings SET summary_enabled = 1 WHERE note_id IN (SELECT note_id FROM note_summaries)`,
     ],
   },  {
+    // 分享页默认附带摘要，可由分享设置关闭。
+    version: 21,
+    statements: [
+      `ALTER TABLE shares ADD COLUMN include_summary INTEGER NOT NULL DEFAULT 1`,
+    ],
+  },
+  {
     // 谱系与 origin 分离：evolved=1 表示这份摘要含用户演化出来的口径，自动生成要接着补充而非推翻。
     version: 20,
     statements: [
@@ -699,7 +706,7 @@ const REQUIRED_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   backup_targets: ['id', 'user_id', 'type', 'name', 'enabled', 'config', 'secret', 'last_run_at', 'last_status', 'last_error', 'created_at', 'updated_at'],
   backup_archives: ['user_id', 'target_id', 'destination', 'archive_path', 'created_at'],
   backup_runs: ['id', 'user_id', 'trigger', 'status', 'started_at', 'finished_at', 'note_count', 'file_count', 'bytes', 'detail'],
-  shares: ['slug', 'note_id', 'user_id', 'password_hash', 'expires_at', 'views', 'created_at'],
+  shares: ['slug', 'note_id', 'user_id', 'password_hash', 'expires_at', 'views', 'created_at', 'include_summary'],
   share_asset_sessions: ['id', 'slug', 'password_hash', 'expires_at', 'created_at'],
   changes: ['seq', 'user_id', 'entity', 'entity_id', 'op', 'at'],
   sessions: ['id', 'user_id', 'expires_at', 'created_at'],

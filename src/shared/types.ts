@@ -540,6 +540,8 @@ export interface ShareInfo {
   expiresAt: number | null
   views: number
   createdAt: number
+  /** 分享页是否附带摘要；新建分享默认开启。 */
+  includeSummary: boolean
 }
 
 export interface ShareListItem extends ShareInfo {
@@ -550,6 +552,8 @@ export interface ShareListItem extends ShareInfo {
 export interface PublicNote {
   title: string
   content: string
+  /** 分享者开启「附带摘要」时才有值。 */
+  summary?: { text: string; updatedAt: number } | null
   updatedAt: number
   createdAt: number
   author: { name: string; avatarUrl: string }

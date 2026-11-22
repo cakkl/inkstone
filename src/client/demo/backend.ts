@@ -838,6 +838,7 @@ export function createDemoBackend(): DemoBackend {
       expiresAt,
       views: existing?.info.views ?? 0,
       createdAt: existing?.info.createdAt ?? Date.now(),
+      includeSummary: body.includeSummary !== false,
     }
     state.shares.set(noteId, { info, password })
     return c.json({ share: absoluteShare(info, c.req.url) })
@@ -858,9 +859,11 @@ export function createDemoBackend(): DemoBackend {
     const note = state.notes.get(share.info.noteId)
     if (!note || note.deletedAt !== null) return apiError(404, 'not_found', 'Shared note not found')
     share.info = { ...share.info, views: share.info.views + 1 }
+    const sample = share.info.includeSummary ? state.summaries.get(note.id) : undefined
     const response: PublicNote = {
       title: note.title,
       content: note.content,
+      summary: sample ? { text: sample.text, updatedAt: sample.updatedAt } : null,
       updatedAt: note.updatedAt,
       createdAt: note.createdAt,
       author: { name: state.user.name, avatarUrl: state.user.avatarUrl },
