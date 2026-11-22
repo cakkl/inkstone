@@ -30,6 +30,7 @@ export interface DemoState {
   authenticated: boolean
   password: string
   registrationOpen: boolean
+  /** 每次重建状态都取新值：客户端缓存的 cursor 一旦与它相等就会跳过同步。 */
   cursor: number
   user: PublicUser
   settings: UserSettings
@@ -96,7 +97,7 @@ export function createDemoState(): DemoState {
     authenticated: false,
     password: 'password',
     registrationOpen: false,
-    cursor: 1,
+    cursor: Date.now(),
     user: {
       id: seedId(1),
       login: 'admin',

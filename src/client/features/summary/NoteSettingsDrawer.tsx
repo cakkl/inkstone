@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import type { AiNoteSummaryResponse, AiSummaryNoteMode } from '@shared/types'
+import { computeSummaryPolicy, DEFAULT_NOTE_SUMMARY_SETTINGS } from '@shared/summary-policy'
+import type { AiSummaryNoteMode } from '@shared/types'
 import { api } from '../../lib/api'
 import { t } from '../../lib/i18n'
 import { Drawer, confirm } from '../../components/overlay'
 import { Segmented } from '../../components/form'
-import { LoadingBlock } from '../../components/feedback'
 import { useUi } from '../../store/ui'
 import { useSession } from '../../store/session'
-import { readCachedSummary, writeCachedSummary } from './summary-cache'
+import { useNotes } from '../../store/notes'
 
 type Tri = 'inherit' | 'on' | 'off'
 type Page = 'root' | 'summary'
@@ -30,39 +30,33 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
   const instanceAiEnabled = useSession((s) => s.site?.aiSummary.enabled ?? true)
   /** 实例不允许自动摘要时，单篇的「自动生成」也不会生效。 */
   const instanceAuto = useSession((s) => s.site?.aiSummary.allowAutoGenerate ?? true)
-  const [state, setState] = useState<AiNoteSummaryResponse | null>(null)
+  const siteAi = useSession((s) => s.site?.aiSummary)
+  const userAi = useSession((s) => s.settings.aiSummary)
+  /** 摘要与单篇设置随笔记同步，打开抽屉就能直接用，不必等接口。 */
+  const note = useNotes((s) => s.notes[noteId])
   const [busy, setBusy] = useState(false)
   const [page, setPage] = useState<Page>('root')
-  const userId = useSession((s) => s.user?.id)
 
   useEffect(() => {
-    if (!open) {
-      setPage('root')
-      return
-    }
-    let cancelled = false
-    // 切笔记先替掉上一篇的状态：命中快照直接用，没快照就显示加载态。
-    setState(readCachedSummary(userId, noteId, { allowStale: true }))
-    api.notes
-      .summary(noteId)
-      .then((next) => {
-        if (cancelled) return
-        setState(next)
-        writeCachedSummary(userId, noteId, next)
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [open, noteId, userId])
+    if (!open) setPage('root')
+  }, [open])
+
+  const settings = note?.summarySettings ?? DEFAULT_NOTE_SUMMARY_SETTINGS
+  const policy = computeSummaryPolicy({
+    instance: siteAi ?? { enabled: true, allowAutoGenerate: false },
+    user: { enabled: userAi.enabled, autoGenerate: userAi.autoGenerate },
+    note: settings,
+    hasSummary: Boolean(note?.summary),
+  })
 
   const apply = async (patch: Parameters<typeof api.notes.setSummarySettings>[1]) => {
     if (busy) return
     setBusy(true)
     try {
       const next = await api.notes.setSummarySettings(noteId, patch)
-      setState(next)
-      writeCachedSummary(userId, noteId, next)
+      // 本地立即生效，后续 sync 会以服务端值为准。
+      useNotes.getState().setNoteSummarySettings(noteId, next.settings)
+      useNotes.getState().setNoteSummary(noteId, next.summary)
       onChanged()
       toast({ title: t('summary.saved') })
     } catch {
@@ -85,16 +79,12 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
     await apply({ aiMode: next === 'inherit' ? 'inherit' : next === 'on' ? 'enabled' : 'disabled' })
   }
 
-  const summaryState = toTri(state?.settings.summaryEnabled)
-  // 状态未到时显示加载中，别把上一篇的结论并到当前笔记上。
-  const statusText =
-    state === null
-      ? t('common.loading')
-      : summaryState === 'off'
-        ? t('workspace.note_off')
-        : state.visible
-          ? t('workspace.note_on')
-          : t('workspace.note_summary_auto')
+  const summaryState = toTri(policy.summaryEnabled)
+  const statusText = summaryState === 'off'
+    ? t('workspace.note_off')
+    : policy.visible
+      ? t('workspace.note_on')
+      : t('workspace.note_summary_auto')
 
   return (
     <Drawer open={open} onClose={onClose} side="right" width={340} title={t('workspace.note_settings')}>
@@ -104,13 +94,13 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
             type="button"
             className="flex w-full items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-[var(--bg-hover)]"
             onClick={() => setPage('summary')}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block text-[13px] text-[var(--text-primary)]">{t('workspace.note_summary_section')}</span>
-              <span className="mt-0.5 block text-[11.5px] text-[var(--text-tertiary)]">{statusText}</span>
-            </span>
-            <ChevronRight size={14} className="shrink-0 text-[var(--text-quaternary)]" />
-          </button>
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] text-[var(--text-primary)]">{t('workspace.note_summary_section')}</span>
+            <span className="mt-0.5 block text-[11.5px] text-[var(--text-tertiary)]">{statusText}</span>
+          </span>
+          <ChevronRight size={14} className="shrink-0 text-[var(--text-quaternary)]" />
+        </button>
         </div>
       ) : (
         <div className="space-y-4 px-4 py-3">
@@ -123,10 +113,6 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
             {t('workspace.note_settings')}
           </button>
 
-          {state === null ? (
-            <LoadingBlock />
-          ) : (
-            <>
               <div className="space-y-2">
                 <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
                   {t('workspace.note_summary_section')}
@@ -153,7 +139,7 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
                       {t('workspace.note_ai_section')}
                     </h3>
                     <Segmented
-                      value={aiToTri(state.settings.aiMode)}
+                      value={aiToTri(settings.aiMode)}
                       disabled={busy}
                       onChange={(value) => void changeAi(value)}
                       options={[
@@ -170,7 +156,7 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
                         {t('workspace.note_auto_section')}
                       </h3>
                       <Segmented
-                        value={toTri(state.settings.autoGenerate)}
+                        value={toTri(settings.autoGenerate)}
                         disabled={busy}
                         onChange={(value) => void apply({ autoGenerate: fromTri(value) })}
                         options={[
@@ -183,8 +169,6 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
                   )}
                 </>
               )}
-            </>
-          )}
         </div>
       )}
     </Drawer>

@@ -3,6 +3,7 @@ import type { AiNoteSummary } from '@shared/types'
 import { sha256Hex } from '../lib/encoding'
 import { pushVersion, saveDraft } from './drafts'
 import { SummaryProviderError, type SummaryLength, type SummaryProvider } from './provider'
+import { notifySummaryChanged } from './sync-rows'
 import { PROMPT_VERSION, SUMMARY_MODEL } from './workers-ai'
 import { readUsage, remainingNeurons, recordUsage, utcDateKey } from './usage'
 
@@ -218,6 +219,7 @@ export async function generateSummary(input: GenerateSummaryInput): Promise<Gene
       mode === 'refine' ? (existing?.last_fresh_at ?? null) : now,
     )
     .run()
+  await notifySummaryChanged(db, userId, note.id)
 
   return {
     ok: true,
@@ -279,4 +281,5 @@ export async function saveUserSummary(input: {
       existing?.last_fresh_at ?? null,
     )
     .run()
+  await notifySummaryChanged(input.db, input.userId, input.note.id)
 }

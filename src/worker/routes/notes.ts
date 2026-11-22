@@ -30,6 +30,7 @@ import { requireAuth } from '../middleware/auth'
 import { aiDeleteNeededSql, enqueueNoteIndex, noteIndexQueueStatement } from '../mcp/ai-search'
 import { enqueueSummary, dropQueuedSummary } from '../summary/queue'
 import { summarySourceHash } from '../summary/service'
+import { attachNoteSummaries, loadNoteSummaryBundles } from '../summary/sync-rows'
 
 export const notesRoutes = new Hono<AppBindings>()
 
@@ -989,8 +990,13 @@ notesRoutes.get('/:id/backlinks', async (c) => {
 })
 
 
+/** 单篇也要带摘要：客户端 adoptNote 会用单篇响应覆盖本地，缺摘要会把已同步的冲掉。 */
 async function loadNote(db: D1Database, userId: string, id: string): Promise<Note> {
-  return toNote(await loadNoteRow(db, userId, id))
+  const [row, bundles] = await Promise.all([
+    loadNoteRow(db, userId, id),
+    loadNoteSummaryBundles(db, userId, [id]),
+  ])
+  return attachNoteSummaries([toNote(row)], bundles)[0]!
 }
 
 async function loadNoteRow(db: D1Database, userId: string, id: string): Promise<NoteRow> {

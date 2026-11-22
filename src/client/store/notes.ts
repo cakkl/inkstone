@@ -78,6 +78,9 @@ interface NotesState {
     replayPending: () => Promise<void>;
     setOnline: (online: boolean) => void;
     applySync: (payload: SyncResponse) => void;
+    /** 摘要接口返回后立即更新本地快照，不等下一次 sync。 */
+    setNoteSummary: (noteId: string, summary: NoteSummary['summary'] | undefined) => void;
+    setNoteSummarySettings: (noteId: string, settings: NoteSummary['summarySettings']) => void;
 }
 type SetNotesState = StoreApi<NotesState>['setState'];
 let saveTimer: number | undefined;
@@ -1289,6 +1292,22 @@ export const useNotes = create<NotesState>((set, get) => ({
                 .catch(() => { });
         }
     },
+    setNoteSummary(noteId, summary) {
+        set((state) => {
+            const current = state.notes[noteId];
+            if (!current || noteSummaryTextEqual(current.summary, summary))
+                return state;
+            return { notes: { ...state.notes, [noteId]: { ...current, summary } } };
+        });
+    },
+    setNoteSummarySettings(noteId, settings) {
+        set((state) => {
+            const current = state.notes[noteId];
+            if (!current || noteSummarySettingsEqual(current.summarySettings, settings))
+                return state;
+            return { notes: { ...state.notes, [noteId]: { ...current, summarySettings: settings } } };
+        });
+    },
 }));
 
 type TagCacheState = Pick<NotesState, 'notes' | 'tags'>;
@@ -2046,8 +2065,21 @@ function noteSummaryEqual(a: NoteSummary, b: NoteSummary): boolean {
         a.createdAt === b.createdAt &&
         a.updatedAt === b.updatedAt &&
         a.deletedAt === b.deletedAt &&
+        noteSummaryTextEqual(a.summary, b.summary) &&
+        noteSummarySettingsEqual(a.summarySettings, b.summarySettings) &&
         a.tags.length === b.tags.length &&
         a.tags.every((tag, index) => tag === b.tags[index]));
+}
+/** 摘要随笔记同步，内容变化也要触发 store 更新（rev 不变，所以单独比较）。 */
+function noteSummaryTextEqual(a: NoteSummary['summary'], b: NoteSummary['summary']): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return a.text === b.text && a.origin === b.origin && a.status === b.status && a.updatedAt === b.updatedAt;
+}
+function noteSummarySettingsEqual(a: NoteSummary['summarySettings'], b: NoteSummary['summarySettings']): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return a.summaryEnabled === b.summaryEnabled && a.aiMode === b.aiMode && a.autoGenerate === b.autoGenerate;
 }
 function scheduleShellSave(get: () => NotesState): void {
     const state = get();

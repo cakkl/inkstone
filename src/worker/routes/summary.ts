@@ -18,6 +18,7 @@ import { acceptDraft, deleteDraft, listVersions, loadDraft, restoreVersion } fro
 import { resolveSummaryPolicy, setNoteFlags } from '../summary/policy'
 import { purgeAiSummary, purgeNoteSummary } from '../summary/purge'
 import { dropQueuedSummary, hasQueuedSummary } from '../summary/queue'
+import { notifySummaryChanged } from '../summary/sync-rows'
 import { createWorkersAiProvider } from '../summary/workers-ai'
 import { readUsage, remainingNeurons } from '../summary/usage'
 
@@ -215,6 +216,7 @@ summaryRoutes.delete('/:id/summary', async (c) => {
     .prepare(`DELETE FROM note_summaries WHERE note_id = ?1 AND user_id = ?2`)
     .bind(note.id, userId)
     .run()
+  await notifySummaryChanged(c.env.DB, userId, note.id, 'delete')
   return c.json({ ok: true as const })
 })
 
