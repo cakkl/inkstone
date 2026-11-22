@@ -20,6 +20,7 @@ import type { Heading } from '../lib/markdown/renderer';
 import { t } from "../lib/i18n";
 
 const externalValueUpdate = Annotation.define<boolean>();
+
 export interface CodeEditorProps {
     value: string;
     live?: boolean;

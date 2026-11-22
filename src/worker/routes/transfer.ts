@@ -28,6 +28,7 @@ import {
 } from '../attachments/backend'
 import { attachmentObjectKey, type AttachmentObjectStorage } from '../attachments/keys'
 import type { AppBindings } from '../env'
+import { restoreSummaries } from '../summary/restore'
 import {
   buildNoteDerivedStatements,
   pruneOrphanTags,
@@ -450,6 +451,47 @@ async function importBackupFileBatch(
     }
     await importBackupMarkdown(c, userId, entry, text, manifest, ctx)
   }
+  await restoreBackupSummaries(c.env.DB, userId, manifest, ctx)
+}
+
+/** 备份恢复的摘要入口：交给共用的 restoreSummaries，映射不到目标笔记就跳过。 */
+export async function restoreBackupSummaries(
+  db: D1Database,
+  userId: string,
+  manifest: MarkdownBackupManifest,
+  ctx: ImportContext,
+): Promise<void> {
+  await restoreSummaries({
+    db,
+    userId,
+    entries: manifest.summaries ?? [],
+    resolveNoteId: (sourceId) => resolveImportedNoteId(db, userId, sourceId, ctx),
+  })
+}
+
+/** 源 id → 目标笔记 id：优先用本轮的映射，其次查 import_mappings，最后才认同 id。 */
+async function resolveImportedNoteId(
+  db: D1Database,
+  userId: string,
+  sourceId: string,
+  ctx: ImportContext,
+): Promise<string | null> {
+  const mapped = ctx.byId?.get(sourceId)
+  if (mapped) return mapped.id
+  const row = await db
+    .prepare(
+      `SELECT m.target_id FROM import_mappings m
+        JOIN notes n ON n.id = m.target_id AND n.user_id = m.user_id
+       WHERE m.user_id = ?1 AND m.entity = 'note' AND m.source_id = ?2`,
+    )
+    .bind(userId, sourceId)
+    .first<{ target_id: string }>()
+  if (row) return row.target_id
+  const same = await db
+    .prepare(`SELECT id FROM notes WHERE id = ?1 AND user_id = ?2`)
+    .bind(sourceId, userId)
+    .first<{ id: string }>()
+  return same?.id ?? null
 }
 
 async function verifyBackupEntry(
@@ -876,6 +918,37 @@ async function importBundle(
   }
 
   await restoreTagMetadata(c.env.DB, userId, rawTags)
+  await restoreBundleSummaries(c.env.DB, userId, bundle.summaries, noteIdMap)
+}
+
+/** 结构化导出的摘要：只认能在本轮映射到目标笔记的条目，其余静默跳过。 */
+async function restoreBundleSummaries(
+  db: D1Database,
+  userId: string,
+  rawSummaries: unknown,
+  noteIdMap: ReadonlyMap<string, string>,
+): Promise<void> {
+  if (!Array.isArray(rawSummaries) || rawSummaries.length === 0) return
+  const entries = rawSummaries
+    .slice(0, LIMITS.importArchiveEntriesMax * 4)
+    .filter((raw): raw is Record<string, unknown> => isRecord(raw))
+    .map((raw) => ({
+      noteId: typeof raw.noteId === 'string' ? raw.noteId : '',
+      text: typeof raw.text === 'string' ? raw.text : '',
+      origin: raw.origin === 'user' ? 'user' as const : 'ai' as const,
+      language: typeof raw.language === 'string' ? raw.language : 'zh-CN',
+      model: typeof raw.model === 'string' ? raw.model : null,
+      evolved: raw.evolved === true,
+      refineCount: finiteNumber(raw.refineCount) ?? 0,
+      generatedAt: validTimestamp(raw.generatedAt) ?? 0,
+      updatedAt: validTimestamp(raw.updatedAt) ?? 0,
+    }))
+  await restoreSummaries({
+    db,
+    userId,
+    entries,
+    resolveNoteId: (sourceId) => noteIdMap.get(sourceId) ?? null,
+  })
 }
 
 interface PreparedAttachmentCandidate {

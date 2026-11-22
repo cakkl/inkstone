@@ -35,6 +35,7 @@ interface ShareRow {
   expires_at: number | null
   views: number
   created_at: number
+  include_summary: number
 }
 
 function toShareInfo(row: ShareRow, origin: string): ShareInfo {
@@ -46,6 +47,7 @@ function toShareInfo(row: ShareRow, origin: string): ShareInfo {
     expiresAt: row.expires_at,
     views: row.views,
     createdAt: row.created_at,
+    includeSummary: row.include_summary !== 0,
   }
 }
 
@@ -55,6 +57,7 @@ shareManageRoutes.use('*', requireAuth)
 shareManageRoutes.get('/', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT s.slug, s.note_id, s.user_id, s.password_hash, s.expires_at, s.views, s.created_at,
+            s.include_summary,
             n.title AS note_title, n.deleted_at
        FROM shares s JOIN notes n ON n.id = s.note_id AND n.user_id = s.user_id
       WHERE s.user_id = ?1
@@ -82,7 +85,11 @@ shareManageRoutes.get('/:noteId', async (c) => {
 shareManageRoutes.post('/:noteId', async (c) => {
   const userId = c.get('userId')
   const noteId = c.req.param('noteId')
-  const body = await readJson<{ password?: string | null; expiresIn?: number | null }>(c, JSON_BODY_LIMITS.small)
+  const body = await readJson<{
+    password?: string | null
+    expiresIn?: number | null
+    includeSummary?: boolean
+  }>(c, JSON_BODY_LIMITS.small)
 
   const note = await c.env.DB.prepare(
     `SELECT id FROM notes WHERE id = ?1 AND user_id = ?2 AND deleted_at IS NULL`,
@@ -108,6 +115,9 @@ shareManageRoutes.post('/:noteId', async (c) => {
   ) {
     throw ApiError.badRequest('expiresIn must be a non-negative number or null')
   }
+  if (body.includeSummary !== undefined && typeof body.includeSummary !== 'boolean') {
+    throw ApiError.badRequest('includeSummary must be a boolean')
+  }
   const expiresAt =
     typeof body.expiresIn === 'number' && body.expiresIn > 0
         ? Date.now() + Math.min(body.expiresIn, 365 * 24 * 60 * 60 * 1000)
@@ -122,11 +132,12 @@ shareManageRoutes.post('/:noteId', async (c) => {
         : null
 
   const written = await c.env.DB.prepare(
-    `INSERT INTO shares (slug, note_id, user_id, password_hash, expires_at, views, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)
+    `INSERT INTO shares (slug, note_id, user_id, password_hash, expires_at, views, created_at, include_summary)
+     VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?9)
      ON CONFLICT(note_id) DO UPDATE SET
        password_hash = CASE WHEN ?7 = 1 THEN excluded.password_hash ELSE shares.password_hash END,
-       expires_at = CASE WHEN ?8 = 1 THEN excluded.expires_at ELSE shares.expires_at END
+       expires_at = CASE WHEN ?8 = 1 THEN excluded.expires_at ELSE shares.expires_at END,
+       include_summary = excluded.include_summary
      WHERE shares.user_id = excluded.user_id`,
   )
     .bind(
@@ -138,6 +149,7 @@ shareManageRoutes.post('/:noteId', async (c) => {
       Date.now(),
       replacePassword ? 1 : 0,
       body.expiresIn !== undefined ? 1 : 0,
+      body.includeSummary === false ? 0 : 1,
     )
     .run()
   if (!written.meta.changes) throw new ApiError(409, 'conflict', 'Share state changed. Refresh and try again')
@@ -248,9 +260,19 @@ shareRoutes.post('/:slug', async (c) => {
     })
   }
 
+  // 只在分享者开启时读取摘要，避免无谓查询与误外发。
+  const summary = share.include_summary
+    ? await c.env.DB.prepare(
+      `SELECT summary_text, updated_at FROM note_summaries WHERE note_id = ?1 AND user_id = ?2`,
+    )
+      .bind(share.note_id, share.user_id)
+      .first<{ summary_text: string; updated_at: number }>()
+    : null
+
   const body_: PublicNote = {
     title: note.title,
     content: note.content,
+    summary: summary ? { text: summary.summary_text, updatedAt: summary.updated_at } : null,
     createdAt: note.created_at,
     updatedAt: note.updated_at,
     author: { name: note.name, avatarUrl: note.avatar_url },

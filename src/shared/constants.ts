@@ -35,6 +35,20 @@ export const LIMITS = {
   searchLimit: 50,
 
   ftsContentChars: 200_000,
+
+  /** AI 摘要：正文有效字符数门槛（含代码内容）。低于它只能手动生成。 */
+  aiSummaryMinChars: 100,
+  /** 摘要正文上限，防止模型返回超长内容撑大 D1 行。 */
+  aiSummaryMaxChars: 4000,
+  /** 每日 neurons 上限；免费额度为 10,000/天，留出 embedding 用量余量。 */
+  aiSummaryDailyNeurons: 8_000,
+  /** 自动摘要的静默期：最后一次修改后至少等待这么久。 */
+  aiSummaryQuietHours: 4,
+  /** 自动摘要只在用户本地时间的这个区间内执行（含起点、不含终点）。 */
+  aiSummaryWindowStartHour: 1,
+  aiSummaryWindowEndHour: 6,
+  /** 积压超过该时长仍未执行的任务作废重排，避免长期不用后一次涌出。 */
+  aiSummaryQueueMaxAgeHours: 72,
 } as const
 
 export const ACCENTS: { name: AccentName; swatch: string; foreground: string }[] = [
@@ -67,6 +81,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
     proseSize: 16,
     proseWidth: 'normal',
     proseLineHeight: 1.65,
+    timezone: '',
   },
   editor: {
     fontSize: 15,
@@ -97,6 +112,8 @@ export const DEFAULT_SETTINGS: UserSettings = {
     realtime: true,
     pollIntervalMs: 15_000,
   },
+  // 自动生成默认关闭：升级后不能未经同意就把正文发给外部 AI。
+  aiSummary: { enabled: true, autoGenerate: false },
 }
 
 export const BACKUP_INTERVALS: Record<string, number> = {
@@ -127,6 +144,7 @@ export function mergeSettings(partial: unknown): UserSettings {
   const preview = asRecord(src.preview)
   const backup = asRecord(src.backup)
   const sync = asRecord(src.sync)
+  const aiSummary = asRecord(src.aiSummary)
 
   base.appearance.theme = enumValue(appearance.theme, THEMES, base.appearance.theme)
   base.appearance.language = enumValue(
@@ -167,7 +185,7 @@ export function mergeSettings(partial: unknown): UserSettings {
     2.2,
     base.appearance.proseLineHeight,
   )
-
+  base.appearance.timezone = timezoneValue(appearance.timezone)
   base.editor.fontSize = integerInRange(editor.fontSize, 12, 22, base.editor.fontSize)
   base.editor.fontFamily = enumValue(editor.fontFamily, EDITOR_FONTS, base.editor.fontFamily)
   base.editor.lineNumbers = booleanValue(editor.lineNumbers, base.editor.lineNumbers)
@@ -212,6 +230,9 @@ export function mergeSettings(partial: unknown): UserSettings {
     base.sync.pollIntervalMs,
   )
 
+  base.aiSummary.enabled = booleanValue(aiSummary.enabled, base.aiSummary.enabled)
+  base.aiSummary.autoGenerate = booleanValue(aiSummary.autoGenerate, base.aiSummary.autoGenerate)
+
   return base
 }
 
@@ -220,7 +241,7 @@ export function mergeSettingsPatch(current: unknown, patch: unknown): UserSettin
   const previous = asRecord(current)
   const incoming = asRecord(patch)
   const combined: Record<string, unknown> = { ...previous }
-  for (const section of ['appearance', 'editor', 'preview', 'backup', 'sync'] as const) {
+  for (const section of ['appearance', 'editor', 'preview', 'backup', 'sync', 'aiSummary'] as const) {
     combined[section] = {
       ...asRecord(previous[section]),
       ...asRecord(incoming[section]),
@@ -236,6 +257,7 @@ function cloneDefaultSettings(): UserSettings {
     preview: { ...DEFAULT_SETTINGS.preview },
     backup: { ...DEFAULT_SETTINGS.backup },
     sync: { ...DEFAULT_SETTINGS.sync },
+    aiSummary: { ...DEFAULT_SETTINGS.aiSummary },
   }
 }
 
@@ -261,6 +283,18 @@ function numberInRange(value: unknown, min: number, max: number, fallback: numbe
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.min(max, Math.max(min, value))
     : fallback
+}
+
+/** IANA 时区名；非法值一律当未知（空串），由服务端回落 UTC。 */
+function timezoneValue(value: unknown): string {
+  if (typeof value !== 'string' || !value || value.length > 64) return ''
+  if (!/^[A-Za-z][A-Za-z0-9_+\-/]*$/.test(value)) return ''
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0)
+    return value
+  } catch {
+    return ''
+  }
 }
 
 function integerInRange(value: unknown, min: number, max: number, fallback: number): number {

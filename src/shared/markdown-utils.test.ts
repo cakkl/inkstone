@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  countSummaryCharacters,
   extractAttachmentIds,
   extractTags,
   extractTagsResult,
@@ -117,5 +118,26 @@ describe('extractAttachmentIds', () => {
 
   it('ignores md-example markers inside ordinary code fences', () => {
     expect(extractAttachmentIds(`~~~~text\n\`\`\`md-example\n![a](/api/files/${idA})\n\`\`\`\n~~~~`)).toEqual([])
+  })
+})
+
+describe('countSummaryCharacters', () => {
+  it('ignores markup, whitespace and front matter but keeps visible text', () => {
+    const note = ['---', 'title: ignored', '---', '# Heading', '', '- **bold** item', '> quote'].join('\n')
+    // Heading + bold item + quote, whitespace and markers dropped.
+    expect(countSummaryCharacters(note)).toBe('Headingbolditemquote'.length)
+  })
+
+  it('counts code block content but not the fence lines', () => {
+    expect(countSummaryCharacters('```ts\nconst a = 1\n```')).toBe('consta=1'.length)
+  })
+
+  it('counts a link once by its visible text', () => {
+    expect(countSummaryCharacters('[label](https://example.com/a/very/long/target)')).toBe('label'.length)
+  })
+
+  it('reaches the 100 character threshold exactly', () => {
+    expect(countSummaryCharacters('字'.repeat(99))).toBe(99)
+    expect(countSummaryCharacters('字'.repeat(100))).toBe(100)
   })
 })

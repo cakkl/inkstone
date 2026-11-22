@@ -29,6 +29,8 @@ export interface SiteInfo {
 
   realtimeEnabled: boolean
   version: string
+  /** 实例级 AI 摘要开关，登录时下发，前端据此隐藏/禁用入口。 */
+  aiSummary: { enabled: boolean; allowAutoGenerate: boolean }
 }
 
 export interface SessionInfo {
@@ -90,6 +92,8 @@ export interface AppearanceSettings {
   proseSize: number
   proseWidth: ProseWidth
   proseLineHeight: number
+  /** IANA 时区（如 Asia/Shanghai）。空串表示未知，服务端按 UTC 处理。 */
+  timezone: string
 }
 
 export interface EditorSettings {
@@ -125,12 +129,22 @@ export interface SyncSettings {
   pollIntervalMs: number
 }
 
+/** 用户级 AI 摘要开关。`autoGenerate` 默认关闭，避免未经同意就把正文发给外部服务。 */
+export interface AiSummaryUserSettings {
+  enabled: boolean
+  autoGenerate: boolean
+}
+
+/** 单篇笔记策略：`disabled` 表示该笔记完全不使用 AI 摘要。 */
+export type AiSummaryNoteMode = 'inherit' | 'enabled' | 'disabled'
+
 export interface UserSettings {
   appearance: AppearanceSettings
   editor: EditorSettings
   preview: PreviewSettings
   backup: BackupSettings
   sync: SyncSettings
+  aiSummary: AiSummaryUserSettings
 }
 
 
@@ -154,6 +168,66 @@ export interface NoteSummary {
 
 export interface Note extends NoteSummary {
   content: string
+}
+
+/** AI 摘要的来源：AI 生成后未被手改 / 用户手改过。 */
+export type AiSummaryOrigin = 'ai' | 'user'
+
+/** `outdated` 表示正文在摘要生成后已变化，内容可能过期。 */
+export type AiSummaryStatus = 'current' | 'outdated'
+
+export interface AiNoteSummary {
+  noteId: string
+  text: string
+  origin: AiSummaryOrigin
+  status: AiSummaryStatus
+  language: string
+  model: string | null
+  generatedAt: number | null
+  updatedAt: number
+}
+
+export interface AiSummaryDraft {
+  text: string
+  operation: string
+  createdAt: number
+}
+
+/** 智能生成的两种模式：补充现有摘要，或完全重写。 */
+export type SummaryDraftMode = 'fresh' | 'refine'
+
+export interface AiSummaryVersion {
+  id: string
+  text: string
+  origin: AiSummaryOrigin
+  operation: string
+  createdAt: number
+}
+
+export interface AiNoteSummaryResponse {
+  summary: AiNoteSummary | null
+  /** 待确认草稿；接受前不影响正式摘要。 */
+  draft?: AiSummaryDraft | null
+  /** 草稿是「在旧摘要上补充」还是「全新生成」，用于界面提示。 */
+  draftMode?: SummaryDraftMode
+  /** 生成前需要达到的有效字符数；低于它只能靠手动生成。 */
+  minimumCharacters: number
+  /** 该笔记当前的有效字符数。 */
+  characterCount: number
+  /** 今日剩余可用额度（neurons），已用尽时为 0。 */
+  remainingNeurons: number
+  /** 是否显示摘要区。关闭时整个区域不渲染。 */
+  visible: boolean
+  /** 是否允许 AI 生成（不影响手写）。 */
+  canGenerate: boolean
+  /** 是否允许自动生成（夜间排队）。 */
+  autoEligible: boolean
+  /** 单篇设置，用于笔记设置抽屉回显。 */
+  settings: {
+    summaryEnabled: boolean | null
+    aiMode: AiSummaryNoteMode
+    autoGenerate: boolean | null
+  }
 }
 
 export interface Folder {
@@ -466,6 +540,8 @@ export interface ShareInfo {
   expiresAt: number | null
   views: number
   createdAt: number
+  /** 分享页是否附带摘要；新建分享默认开启。 */
+  includeSummary: boolean
 }
 
 export interface ShareListItem extends ShareInfo {
@@ -476,6 +552,8 @@ export interface ShareListItem extends ShareInfo {
 export interface PublicNote {
   title: string
   content: string
+  /** 分享者开启「附带摘要」时才有值。 */
+  summary?: { text: string; updatedAt: number } | null
   updatedAt: number
   createdAt: number
   author: { name: string; avatarUrl: string }
@@ -483,6 +561,20 @@ export interface PublicNote {
   share: { slug: string }
 }
 
+
+export interface ExportSummary {
+  noteId: string
+  text: string
+  origin: 'user' | 'ai'
+  language: string
+  model: string | null
+  /** 含用户演化出的口径，导入后自动生成会继续补充。 */
+  evolved: boolean
+  refineCount: number
+  sourceHash: string
+  generatedAt: number
+  updatedAt: number
+}
 
 export interface ExportBundle {
 
@@ -495,6 +587,8 @@ export interface ExportBundle {
   notes: Note[]
 
   attachments: ExportAttachment[]
+  /** 可选：旧导出没有该字段。 */
+  summaries?: ExportSummary[]
 }
 
 export interface ExportAttachment {
@@ -604,3 +698,6 @@ export type ApiErrorCode =
   | 'two_factor_not_enabled'
   | 'two_factor_setup_expired'
   | 'two_factor_unavailable'
+  | 'ai_unavailable'
+  | 'ai_quota_exhausted'
+  | 'ai_failed'

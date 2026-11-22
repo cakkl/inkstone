@@ -42,6 +42,20 @@ export interface DemoState {
   shares: Map<string, DemoShare>
   backupTargets: Map<string, BackupTarget>
   backupRuns: BackupRun[]
+  /** 演示用的摘要状态：key 为 noteId，值模拟服务端返回的字段。 */
+  summaries: Map<string, DemoSampleSummary>
+  /** AI 生成的待确认草稿：不覆盖用户已手写的摘要。 */
+  summaryDrafts: Map<string, DemoSampleSummary>
+  /** 摘要历史版本，最新的在前。 */
+  summaryVersions: Map<string, DemoSampleSummary[]>
+  summarySettings: Map<string, { summaryEnabled: boolean | null; aiMode: 'inherit' | 'enabled' | 'disabled'; autoGenerate: boolean | null }>
+}
+
+export interface DemoSampleSummary {
+  text: string
+  origin: 'ai' | 'user'
+  language: string
+  updatedAt: number
 }
 
 const seedId = (value: number) => `01j${String(value).padStart(23, '0')}`
@@ -73,6 +87,7 @@ export function createDemoState(): DemoState {
     expiresAt: null,
     views: 12,
     createdAt: now - 86_400_000 * 4,
+    includeSummary: true,
   }
 
   return {
@@ -99,6 +114,15 @@ export function createDemoState(): DemoState {
     shares: new Map([[welcomeShare.noteId, { info: welcomeShare, password: null }]]),
     backupTargets: new Map(),
     backupRuns: [],
+    summaries: new Map([[notes[0]!.id, {
+      text: notes[0]!.excerpt || notes[0]!.content.replace(/\s+/g, ' ').slice(0, 120),
+      origin: 'ai',
+      language: 'zh-CN',
+      updatedAt: now - 3_600_000,
+    }]]),
+    summaryDrafts: new Map(),
+    summaryVersions: new Map(),
+    summarySettings: new Map(),
   }
 }
 

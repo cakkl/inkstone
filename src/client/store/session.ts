@@ -4,6 +4,7 @@ import type { PublicUser, SessionInfo, SiteInfo, TotpLoginChallenge, UserSetting
 import { api, ApiError } from '../lib/api'
 import { getLocale, setLocale, t } from '../lib/i18n'
 import { localDb } from '../lib/db'
+import { detectedTimezone, shouldUpdateTimezone } from '../lib/timezone'
 import { applyThemeToDom, useUi } from './ui'
 
 interface SessionState {
@@ -130,6 +131,7 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ settings })
     syncAppearanceToDom(settings)
     cacheCurrentSession(get())
+    adoptTimezone(get, settings)
   },
 
   async updateProfile(patch) {
@@ -385,6 +387,16 @@ function adopt(info: SessionInfo, set: (partial: Partial<SessionState>) => void)
     authError: null,
   })
   if (info.user) syncAppearanceToDom(settings)
+}
+
+/**
+ * 自动摘要只在用户本地夜间执行，服务端需要用户时区。
+ * 缺失或与当前设备不一致时静默写回（换时区/出差后窗口才不会按旧时区算）。
+ */
+function adoptTimezone(get: () => SessionState, settings: UserSettings): void {
+  const detected = detectedTimezone()
+  if (!shouldUpdateTimezone(settings.appearance.timezone, detected)) return
+  get().updateSettings({ appearance: { timezone: detected } }, { silent: true })
 }
 
 async function persistSession(info: SessionInfo): Promise<void> {

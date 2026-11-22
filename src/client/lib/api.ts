@@ -1,6 +1,9 @@
 import { CLIENT_HEADER } from '@shared/constants'
 import type { MarkdownBackupManifest } from '@shared/backup-format'
 import type {
+  AiNoteSummaryResponse,
+  AiSummaryNoteMode,
+  AiSummaryVersion,
   AppLocale,
   Attachment,
   AttachmentWithUsage,
@@ -347,13 +350,37 @@ export const api = {
       request<Note>(`/api/notes/${id}/duplicate`, { method: 'POST', body }),
     emptyTrash: () => request<{ purged: number }>('/api/notes/trash/empty', { method: 'POST' }),
     versions: (id: string, signal?: AbortSignal) =>
-      request<{ versions: NoteVersionMeta[] }>(`/api/notes/${id}/versions`, { signal }),
-    version: (id: string, versionId: string, signal?: AbortSignal) =>
+      request<{ versions: NoteVersionMeta[] }>(`/api/notes/${id}/versions`, { signal }),    version: (id: string, versionId: string, signal?: AbortSignal) =>
       request<NoteVersion>(`/api/notes/${id}/versions/${versionId}`, { signal }),
     restoreVersion: (id: string, versionId: string) =>
       request<Note>(`/api/notes/${id}/versions/${versionId}/restore`, { method: 'POST' }),
     backlinks: (id: string, signal?: AbortSignal) =>
       request<{ backlinks: Backlink[] }>(`/api/notes/${id}/backlinks`, { signal }),
+    summary: (id: string, signal?: AbortSignal) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, { signal }),
+    generateSummary: (id: string, options?: { mode?: 'fresh' | 'refine'; instruction?: string }) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, {
+        method: 'POST',
+        body: options ?? {},
+        timeoutMs: 60_000,
+      }),
+    saveSummary: (id: string, text: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary`, { method: 'PATCH', body: { text } }),
+    deleteSummary: (id: string) =>
+      request<{ ok: true }>(`/api/notes/${id}/summary`, { method: 'DELETE' }),
+    acceptSummaryDraft: (id: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/draft/accept`, { method: 'POST' }),
+    discardSummaryDraft: (id: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/draft`, { method: 'DELETE' }),
+    summaryVersions: (id: string, signal?: AbortSignal) =>
+      request<{ versions: AiSummaryVersion[] }>(`/api/notes/${id}/summary/versions`, { signal }),
+    restoreSummaryVersion: (id: string, versionId: string) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/versions/${versionId}/restore`, { method: 'POST' }),
+    setSummarySettings: (
+      id: string,
+      patch: { summaryEnabled?: boolean | null; aiMode?: AiSummaryNoteMode; autoGenerate?: boolean | null },
+    ) =>
+      request<AiNoteSummaryResponse>(`/api/notes/${id}/summary/settings`, { method: 'PUT', body: patch }),
   },
 
   folders: {
@@ -420,13 +447,20 @@ export const api = {
     runs: () => request<{ runs: BackupRun[] }>('/api/backup/runs'),
   },
 
-  settings: {
-    get: () => request<UserSettings>('/api/settings'),
+  settings: {    get: () => request<UserSettings>('/api/settings'),
     save: (body: Partial<UserSettings>) =>
       request<UserSettings>('/api/settings', { method: 'PUT', body }).then((settings) => {
         publishBroadcast({ type: 'settings-changed', clientId: CLIENT_ID })
         return settings
       }),
+    aiSummary: () => request<{ enabled: boolean; allowAutoGenerate: boolean; queueDepth: number }>('/api/settings/ai-summary'),
+    updateAiSummary: (body: { enabled?: boolean; allowAutoGenerate?: boolean }) =>
+      request<{ enabled: boolean; allowAutoGenerate: boolean }>('/api/settings/ai-summary', {
+        method: 'PUT',
+        body,
+      }),
+    backfillAiSummary: () =>
+      request<{ candidates: number; queued: number }>('/api/settings/ai-summary/backfill', { method: 'POST' }),
     stats: () => request<Record<string, number>>('/api/settings/stats'),
   },
 
@@ -462,7 +496,11 @@ export const api = {
       request<{ shares: ShareListItem[] }>('/api/share', { signal }),
     get: (noteId: string, signal?: AbortSignal) =>
       request<{ share: ShareInfo | null }>(`/api/share/${noteId}`, { signal }),
-    create: (noteId: string, body: { password?: string | null; expiresIn?: number | null }) =>
+    create: (noteId: string, body: {
+      password?: string | null
+      expiresIn?: number | null
+      includeSummary?: boolean
+    }) =>
       request<{ share: ShareInfo }>(`/api/share/${noteId}`, { method: 'POST', body }),
     remove: (noteId: string) => request<{ ok: true }>(`/api/share/${noteId}`, { method: 'DELETE' }),
     read: (slug: string, password?: string, signal?: AbortSignal) =>

@@ -759,6 +759,36 @@ export function segmentCJK(text: string): string {
   return text.replace(CJK_GLOBAL, (c) => ` ${c} `).replace(/\s{2,}/g, ' ')
 }
 
+
+/**
+ * 摘要门槛用的有效字符数。与 `countText` 不同：保留代码块内容（技术笔记常由代码组成），
+ * 只去掉格式标记、空白与链接目标。按 Unicode 码位计数。
+ */
+export function countSummaryCharacters(md: string): number {
+  const body = splitFrontMatter(md).body
+  // 只删围栏标记行，保留代码内容
+  let text = body.replace(/^[ \t]{0,3}(?:`{3,}|~{3,})[^\n]*$/gm, '')
+  text = text.replace(/^ {0,3}(?:[-*_][ \t]*){3,}$/gm, '')
+  text = text.replace(/^[ \t]{0,3}#{1,6}\s+/gm, '')
+  text = text.replace(/^[ \t]{0,3}>[ \t]?/gm, '')
+  text = text.replace(/^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+/gm, '')
+  text = text.replace(/^[ \t]*[-*+][ \t]+/gm, '')
+  text = text.replace(/^[ \t]*\d+[.)][ \t]+/gm, '')
+  text = text.replace(/^[ \t]*\|[\s:|-]+\|[ \t]*$/gm, '')
+  text = text.replace(/\|/g, ' ')
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+  text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  text = text.replace(/\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]/g, (_s, a: string, b?: string) => b || a)
+  text = text.replace(/(\*\*|__)(.*?)\1/g, '$2')
+  text = text.replace(/(\*|_)(.*?)\1/g, '$2')
+  text = text.replace(/~~(.*?)~~/g, '$1')
+  text = text.replace(/==(.*?)==/g, '$1')
+  text = text.replace(/<[^>]{1,300}>/g, '')
+  text = text.replace(/^\[\^[^\]]+\]:/gm, '')
+  text = text.replace(/\[\^[^\]]+\]/g, '')
+  return [...text].filter((ch) => !/\s/.test(ch)).length
+}
+
 export function readingMinutes(words: number): number {
   return Math.max(1, Math.round(words / 300))
 }

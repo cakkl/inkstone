@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
-import { mergeSettings, mergeSettingsPatch } from '@shared/constants'
+import { LIMITS, mergeSettings, mergeSettingsPatch } from '@shared/constants'
 import type { UserSettings } from '@shared/types'
 import type { AppBindings } from '../env'
 import { ApiError } from '../lib/errors'
 import { commitChange } from '../lib/notify'
-import { setAllowRegistration } from '../lib/instance-settings'
+import { getAiSummarySettings, setAiSummarySettings, setAllowRegistration } from '../lib/instance-settings'
+import { clearAiSummaryPurge, markAiSummaryPurge } from '../summary/purge'
+import { backfillMissingSummaries, clearUserQueue } from '../summary/queue'
 import { requireCurrentPassword } from '../lib/reauth'
 import { JSON_BODY_LIMITS, readJson } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
@@ -32,12 +34,64 @@ settingsRoutes.get('/', (c) => {
   return c.json(mergeSettings(parse(user.settingsRaw)))
 })
 
+settingsRoutes.get('/ai-summary', async (c) => {
+  const userId = c.get('userId')
+  const [instance, depth] = await Promise.all([
+    getAiSummarySettings(c.env.DB),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM note_summary_queue WHERE user_id = ?1 AND status = 'pending'`,
+    )
+      .bind(userId)
+      .first<{ count: number }>(),
+  ])
+  return c.json({ ...instance, queueDepth: depth?.count ?? 0 })
+})
+
+/** 只补「还没有摘要」的笔记；已有摘要（含过期）保持不动。 */
+settingsRoutes.post('/ai-summary/backfill', async (c) => {
+  const user = c.get('user')
+  const settings = mergeSettings(parse(user.settingsRaw))
+  if (!settings.aiSummary.enabled || !settings.aiSummary.autoGenerate) {
+    throw ApiError.badRequest('Enable automatic summaries first')
+  }
+  // 实例不允许自动摘要时补投只会入队后被丢弃，直接拒绝更清楚。
+  const instance = await getAiSummarySettings(c.env.DB)
+  if (!instance.enabled || !instance.allowAutoGenerate) {
+    throw ApiError.badRequest('Automatic summaries are disabled for this instance')
+  }
+  const result = await backfillMissingSummaries(c.env.DB, {
+    userId: user.id,
+    settingsRaw: user.settingsRaw,
+    minCharacters: LIMITS.aiSummaryMinChars,
+  })
+  return c.json(result)
+})
+
+settingsRoutes.put('/ai-summary', async (c) => {
+  const user = c.get('user')
+  if (user.role !== 'owner') throw ApiError.forbidden('Only the owner can change this setting')
+  const body = await readJson<{ enabled?: boolean; allowAutoGenerate?: boolean }>(c, 4096)
+  if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
+    throw ApiError.badRequest('enabled must be a boolean')
+  }
+  if (body.allowAutoGenerate !== undefined && typeof body.allowAutoGenerate !== 'boolean') {
+    throw ApiError.badRequest('allowAutoGenerate must be a boolean')
+  }
+  const next = await setAiSummarySettings(c.env.DB, {
+    enabled: body.enabled,
+    allowAutoGenerate: body.allowAutoGenerate,
+  })
+  await commitChange(c, 'site', user.id, 'upsert')
+  return c.json(next)
+})
+
 settingsRoutes.put('/', async (c) => {
   const userId = c.get('userId')
   const incoming = await readJson<Partial<UserSettings>>(c, JSON_BODY_LIMITS.settings)
   let previousRaw = c.get('user').settingsRaw
   for (let attempt = 0; attempt < 5; attempt++) {
 
+    const previous = mergeSettings(parse(previousRaw))
     const merged = mergeSettingsPatch(parse(previousRaw), incoming)
     const nextRaw = JSON.stringify(merged)
     const updated = await c.env.DB.prepare(
@@ -46,6 +100,16 @@ settingsRoutes.put('/', async (c) => {
       .bind(nextRaw, userId, previousRaw)
       .run()
     if (updated.meta.changes) {
+      // 关闭 AI 摘要 = 删掉 AI 写的（手写保留）。数量可能很大，走排队清理。
+      if (previous.aiSummary.enabled && !merged.aiSummary.enabled) {
+        await markAiSummaryPurge(c.env.DB, userId, Date.now()).catch(() => undefined)
+      } else if (!previous.aiSummary.enabled && merged.aiSummary.enabled) {
+        await clearAiSummaryPurge(c.env.DB, userId).catch(() => undefined)
+      }
+      // 关掉自动生成就别再排队了：否则积压会留到下次开启。
+      if (previous.aiSummary.autoGenerate && !merged.aiSummary.autoGenerate) {
+        await clearUserQueue(c.env.DB, userId).catch(() => undefined)
+      }
       await commitChange(c, 'settings', userId, 'upsert')
       return c.json(merged)
     }

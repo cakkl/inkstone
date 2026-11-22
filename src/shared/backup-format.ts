@@ -32,6 +32,21 @@ export interface MarkdownBackupAttachmentEntry {
   createdAt: number
 }
 
+export interface MarkdownBackupSummaryEntry {
+  /** 所属笔记在备份里的源 id，恢复时据此映射到目标笔记。 */
+  noteId: string
+  text: string
+  origin: 'user' | 'ai'
+  language: string
+  model: string | null
+  /** 含用户演化出的口径，恢复后自动生成会继续补充而不是推翻。 */
+  evolved: boolean
+  refineCount: number
+  sourceHash: string
+  generatedAt: number
+  updatedAt: number
+}
+
 export interface MarkdownBackupManifest {
   format: typeof MARKDOWN_BACKUP_FORMAT
   version: MarkdownBackupVersion
@@ -40,6 +55,8 @@ export interface MarkdownBackupManifest {
   snapshot: string
   notes: MarkdownBackupNoteEntry[]
   attachments: MarkdownBackupAttachmentEntry[]
+  /** 可选：旧备份没有该字段，按空数组处理。 */
+  summaries?: MarkdownBackupSummaryEntry[]
 }
 
 const HASH_RE = /^[0-9a-f]{64}$/
@@ -182,6 +199,37 @@ export function parseMarkdownBackupManifest(value: unknown): MarkdownBackupManif
   }
   if (notes.some((note) => note.attachmentHashes.some((hash) => !hashes.has(hash)))) return null
 
+  const summaries: MarkdownBackupSummaryEntry[] = []
+  const summarized = new Set<string>()
+  if (value.summaries !== undefined) {
+    if (!Array.isArray(value.summaries)) return null
+    for (const raw of value.summaries) {
+      if (!isRecord(raw)) return null
+      if (typeof raw.noteId !== 'string' || !noteIds.has(raw.noteId) || summarized.has(raw.noteId)) return null
+      if (typeof raw.text !== 'string' || !raw.text || raw.text.length > LIMITS.aiSummaryMaxChars) return null
+      if (raw.origin !== 'user' && raw.origin !== 'ai') return null
+      if (typeof raw.language !== 'string' || !raw.language || raw.language.length > 16) return null
+      if (raw.model !== null && (typeof raw.model !== 'string' || raw.model.length > 64)) return null
+      if (typeof raw.evolved !== 'boolean') return null
+      if (!isSafeSize(raw.refineCount)) return null
+      if (typeof raw.sourceHash !== 'string' || !HASH_RE.test(raw.sourceHash)) return null
+      if (!isTimestamp(raw.generatedAt) || !isTimestamp(raw.updatedAt)) return null
+      summarized.add(raw.noteId)
+      summaries.push({
+        noteId: raw.noteId,
+        text: raw.text,
+        origin: raw.origin,
+        language: raw.language,
+        model: raw.model,
+        evolved: raw.evolved,
+        refineCount: raw.refineCount,
+        sourceHash: raw.sourceHash,
+        generatedAt: raw.generatedAt,
+        updatedAt: raw.updatedAt,
+      })
+    }
+  }
+
   return {
     format: MARKDOWN_BACKUP_FORMAT,
     version: value.version,
@@ -190,6 +238,7 @@ export function parseMarkdownBackupManifest(value: unknown): MarkdownBackupManif
     snapshot: value.snapshot,
     notes,
     attachments,
+    ...(value.summaries === undefined ? {} : { summaries }),
   }
 }
 

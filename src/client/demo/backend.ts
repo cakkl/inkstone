@@ -39,6 +39,7 @@ import {
   newDemoId,
   refreshNote,
   summarize,
+  type DemoSampleSummary,
   type DemoState,
 } from './state'
 
@@ -280,6 +281,128 @@ export function createDemoBackend(): DemoBackend {
     purgeNote(state, id)
     return c.json({ ok: true as const, cursor: state.cursor })
   })
+  app.get('/api/settings/ai-summary', (c) =>
+    c.json({ enabled: true, allowAutoGenerate: false, queueDepth: 0 }),
+  )
+  app.put('/api/settings/ai-summary', async (c) => {
+    await jsonBody(c.req.raw)
+    return c.json({ enabled: true, allowAutoGenerate: false })
+  })
+  app.post('/api/settings/ai-summary/backfill', (c) => {
+    const missing = [...state.notes.values()].filter((note) => !note.deletedAt && !state.summaries.has(note.id)).length
+    return c.json({ candidates: missing, queued: missing })
+  })
+
+  app.get('/api/notes/:id/summary', (c) => c.json(demoSummaryResponse(state, c.req.param('id'))))
+
+  app.put('/api/notes/:id/summary/settings', async (c) => {
+    const id = c.req.param('id')
+    const body = await jsonBody(c.req.raw)
+    const current = state.summarySettings.get(id) ?? { summaryEnabled: null, aiMode: 'inherit' as const, autoGenerate: null }
+    const next = {
+      summaryEnabled: 'summaryEnabled' in body ? (body.summaryEnabled as boolean | null) : current.summaryEnabled,
+      aiMode: (body.aiMode as 'inherit' | 'enabled' | 'disabled' | undefined) ?? current.aiMode,
+      autoGenerate: 'autoGenerate' in body ? (body.autoGenerate as boolean | null) : current.autoGenerate,
+    }
+    state.summarySettings.set(id, next)
+    // 关闭摘要 = 这篇不要了；关闭 AI = 只删 AI 写的。
+    if (next.summaryEnabled === false) {
+      state.summaries.delete(id)
+      state.summaryDrafts.delete(id)
+    } else if (next.aiMode === 'disabled') {
+      state.summaryDrafts.delete(id)
+      if (state.summaries.get(id)?.origin === 'ai') state.summaries.delete(id)
+    }
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.post('/api/notes/:id/summary', async (c) => {
+    const id = c.req.param('id')
+    const note = state.notes.get(id)
+    if (!note) return apiError(404, 'not_found', 'Note not found')
+    const body = await jsonBody(c.req.raw).catch(() => ({}) as Record<string, unknown>)
+    const refine = body.mode === 'refine'
+    const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : ''
+    const existing = state.summaries.get(id)
+    // 模拟 AI：截取正文开头；补充式再拼上旧摘要与用户要求，便于演示两种模式。
+    const snippet = note.content.replace(/\s+/g, ' ').trim().slice(0, 120)
+    const text = refine && existing
+      ? `${existing.text.slice(0, 40)}… → ${instruction || snippet}`
+      : snippet + (note.content.length > 120 ? '…' : '')
+    const generated: DemoSampleSummary = { text, origin: 'ai', language: 'zh-CN', updatedAt: Date.now() }
+    // 与真实后端一致：已有摘要时显式智能生成只存草稿；无摘要则直接落库。
+    if ((body.mode && existing) || existing?.origin === 'user') state.summaryDrafts.set(id, generated)
+    else {
+      pushDemoSummaryVersion(state, id)
+      state.summaries.set(id, generated)
+    }
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.get('/api/notes/:id/summary/versions', (c) => {
+    const versions = state.summaryVersions.get(c.req.param('id')) ?? []
+    return c.json({
+      versions: versions.map((entry, index) => ({
+        id: `demo-summary-v${index}`,
+        text: entry.text,
+        origin: entry.origin,
+        operation: 'replace',
+        createdAt: entry.updatedAt,
+      })),
+    })
+  })
+
+  app.post('/api/notes/:id/summary/versions/:versionId/restore', (c) => {
+    const id = c.req.param('id')
+    const index = Number(c.req.param('versionId').replace('demo-summary-v', ''))
+    const version = state.summaryVersions.get(id)?.[index]
+    if (!version) return apiError(404, 'not_found', 'Version not found')
+    pushDemoSummaryVersion(state, id)
+    state.summaries.set(id, { ...version, updatedAt: Date.now() })
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.post('/api/notes/:id/summary/draft/accept', (c) => {
+    const id = c.req.param('id')
+    const pending = state.summaryDrafts.get(id)
+    if (pending) {
+      pushDemoSummaryVersion(state, id)
+      state.summaries.set(id, pending)
+      state.summaryDrafts.delete(id)
+    }
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.delete('/api/notes/:id/summary/draft', (c) => {
+    const id = c.req.param('id')
+    state.summaryDrafts.delete(id)
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.patch('/api/notes/:id/summary', async (c) => {
+    const id = c.req.param('id')
+    const body = await jsonBody(c.req.raw)
+    if (typeof body.text !== 'string' || !body.text.trim()) {
+      return apiError(400, 'bad_request', 'Summary text cannot be empty')
+    }
+    pushDemoSummaryVersion(state, id)
+    state.summaries.set(id, {
+      text: body.text.trim(),
+      origin: 'user',
+      language: 'zh-CN',
+      updatedAt: Date.now(),
+    })
+    state.summaryDrafts.delete(id)
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.delete('/api/notes/:id/summary', (c) => {
+    state.summaries.delete(c.req.param('id'))
+    state.summaryDrafts.delete(c.req.param('id'))
+    state.summaryVersions.delete(c.req.param('id'))
+    return c.json({ ok: true })
+  })
+
   app.get('/api/notes/:id', (c) => {
     const note = state.notes.get(c.req.param('id'))
     return note ? c.json(note) : apiError(404, 'not_found', 'Note not found')
@@ -715,6 +838,7 @@ export function createDemoBackend(): DemoBackend {
       expiresAt,
       views: existing?.info.views ?? 0,
       createdAt: existing?.info.createdAt ?? Date.now(),
+      includeSummary: body.includeSummary !== false,
     }
     state.shares.set(noteId, { info, password })
     return c.json({ share: absoluteShare(info, c.req.url) })
@@ -735,9 +859,11 @@ export function createDemoBackend(): DemoBackend {
     const note = state.notes.get(share.info.noteId)
     if (!note || note.deletedAt !== null) return apiError(404, 'not_found', 'Shared note not found')
     share.info = { ...share.info, views: share.info.views + 1 }
+    const sample = share.info.includeSummary ? state.summaries.get(note.id) : undefined
     const response: PublicNote = {
       title: note.title,
       content: note.content,
+      summary: sample ? { text: sample.text, updatedAt: sample.updatedAt } : null,
       updatedAt: note.updatedAt,
       createdAt: note.createdAt,
       author: { name: state.user.name, avatarUrl: state.user.avatarUrl },
@@ -985,6 +1111,8 @@ function siteInfo(state: DemoState) {
     attachmentStorage: null,
     realtimeEnabled: false,
     version: APP_VERSION,
+    // 演示环境用本地模拟回复，开关保持开启以便测试摘要流程。
+    aiSummary: { enabled: true, allowAutoGenerate: false },
   } as const
 }
 
@@ -1530,4 +1658,52 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
   const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
   return [...digest].map((value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+/** 新的摘要写入前把旧内容留档，与真实后端的版本表对应。 */
+function pushDemoSummaryVersion(state: DemoState, noteId: string) {
+  const current = state.summaries.get(noteId)
+  if (!current) return
+  const list = state.summaryVersions.get(noteId) ?? []
+  state.summaryVersions.set(noteId, [current, ...list].slice(0, 20))
+}
+
+/** 演示环境的摘要响应：策略固定为「摘要跟随内容、AI 可用、自动关」。 */
+function demoSummaryResponse(state: DemoState, noteId: string) {
+  const note = state.notes.get(noteId)
+  const flags = state.summarySettings.get(noteId) ?? { summaryEnabled: null, aiMode: 'inherit' as const, autoGenerate: null }
+  const sample = state.summaries.get(noteId)
+  const pending = state.summaryDrafts.get(noteId)
+  const canGenerate = flags.aiMode !== 'disabled'
+  const autoEligible = canGenerate && flags.autoGenerate === true
+  const visible = flags.summaryEnabled ?? (Boolean(sample) || autoEligible)
+  return {
+    summary: sample
+      ? {
+          noteId,
+          text: sample.text,
+          origin: sample.origin,
+          status: 'current' as const,
+          language: sample.language,
+          model: sample.origin === 'ai' ? 'demo-model' : null,
+          generatedAt: sample.updatedAt,
+          updatedAt: sample.updatedAt,
+        }
+      : null,
+    draft: pending
+      ? {
+          noteId,
+          text: pending.text,
+          language: pending.language,
+          createdAt: pending.updatedAt,
+        }
+      : null,
+    minimumCharacters: 100,
+    characterCount: [...(note?.content ?? '')].filter((ch) => !/\s/.test(ch)).length,
+    remainingNeurons: 10_000,
+    visible,
+    canGenerate,
+    autoEligible,
+    settings: flags,
+  }
 }

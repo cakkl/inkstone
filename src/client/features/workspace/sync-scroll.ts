@@ -267,7 +267,11 @@ function setScrollTop(element: HTMLElement, value: number): void {
 
 function previewPaddingTop(preview: HTMLElement): number {
   const value = Number.parseFloat(getComputedStyle(preview).paddingTop)
-  return Number.isFinite(value) ? value : 0
+  const base = Number.isFinite(value) ? value : 0
+  // Optional summary header sits above the prose and shifts every anchor down.
+  const header = preview.querySelector<HTMLElement>('[data-preview-header]')
+  const headerHeight = header ? header.getBoundingClientRect().height : 0
+  return base + (Number.isFinite(headerHeight) ? headerHeight : 0)
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

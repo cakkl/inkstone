@@ -352,6 +352,24 @@
   }
 }
 
+@keyframes ink-slide-out-left {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes ink-slide-out-right {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
 @keyframes ink-shimmer {
   from {
     background-position: -180% 0;

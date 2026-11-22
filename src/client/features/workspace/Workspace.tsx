@@ -1,7 +1,7 @@
 import { APP_SHORTCUTS } from '../../lib/shortcuts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { EditorView } from '@codemirror/view';
-import { ArrowLeft, Columns2, Download, Eye, FileCode, FileDown, FileText, FolderClosed, Hash, History, Link as LinkIcon, ListTree, MoreHorizontal, PanelRightClose, Pencil, Plus, Share2, Star, X, } from 'lucide-react';
+import { ArrowLeft, Columns2, Download, Eye, FileCode, FileDown, FileText, FolderClosed, Hash, History, Link as LinkIcon, ListTree, MoreHorizontal, PanelRightClose, Pencil, Plus, Settings2, Share2, Star, X, } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { api } from '../../lib/api';
 import { readingMinutes } from '@shared/markdown-utils';
@@ -23,6 +23,8 @@ import { Outline } from '../preview/Outline';
 import { SplitResizer } from '../shell/Resizer';
 import { EditorToolbar } from './EditorToolbar';
 import { BacklinksPanel } from './BacklinksPanel';
+import { SummaryPanel } from '../summary/SummaryPanel';
+import { NoteSettingsDrawer } from '../summary/NoteSettingsDrawer';
 import { SaveIndicator } from '../shell/SaveIndicator';
 import type { Heading } from '../../lib/markdown/renderer';
 import { useUi, type WorkspacePane } from '../../store/ui';
@@ -36,7 +38,6 @@ import { t, useLocale } from "../../lib/i18n";
 import { preferredScrollBehavior } from '../../lib/motion';
 const SPLIT_HANDLE_WIDTH = 1;
 const PREVIEW_BORDER_WIDTH = 1;
-const OUTLINE_WIDTH = 168;
 export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     onMobileBack?: () => void;
     pane?: WorkspacePane | 'active';
@@ -69,6 +70,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const closeSecondaryNote = useUi((s) => s.closeSecondaryNote);
     const breakpoint = useBreakpoint();
     const containerRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
     const previewScrollerRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const titleInputRef = useRef<HTMLInputElement>(null);
@@ -122,18 +124,39 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 if (position) restoreReadingPosition(scroller, position);
             });
         });
-        const onScroll = () => saveReadingPosition(scroller, editorReadingKey);
+        const onScroll = () => {
+            saveReadingPosition(scroller, editorReadingKey);
+            markSummaryScroll(scroller.scrollTop);
+        };
+        // Layout changes also move scrollTop; only input-driven scrolling should collapse the summary.
+        const onUserScroll = () => {
+            userScrollUntilRef.current = Date.now() + 600;
+        };
+        scroller.addEventListener('wheel', onUserScroll, { passive: true });
+        scroller.addEventListener('touchmove', onUserScroll, { passive: true });
+        scroller.addEventListener('keydown', onUserScroll, true);
         scroller.addEventListener('scroll', onScroll, { passive: true });
         editorScrollCleanupRef.current = () => {
             window.cancelAnimationFrame(frame);
             scroller.removeEventListener('scroll', onScroll);
+            scroller.removeEventListener('wheel', onUserScroll);
+            scroller.removeEventListener('touchmove', onUserScroll);
+            scroller.removeEventListener('keydown', onUserScroll, true);
         };
     }, [editorReadingKey, saveReadingPosition]);
     const [headings, setHeadings] = useState<Heading[]>([]);
     const [moreMenuOpen, setMoreMenuOpen] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
     const [mobileOutlineOpen, setMobileOutlineOpen] = useState(false);
+    const [noteSettingsOpen, setNoteSettingsOpen] = useState(false);
+    const [summaryRefresh, setSummaryRefresh] = useState(0);
+    const [summaryCollapseSignal, setSummaryCollapseSignal] = useState(0);
+    const [summaryExpandSignal, setSummaryExpandSignal] = useState(0);
+    const summaryScrollRef = useRef({ last: 0, accumulated: 0 });
+    const userScrollUntilRef = useRef(0);
+    const ignoreScrollUntilRef = useRef(0);
     const [containerWidth, setContainerWidth] = useState(0);
+    const [scrollGutter, setScrollGutter] = useState(0);
     const isMobile = breakpoint === 'mobile';
     const isDraftNote = useNotes((s) => (note ? s.drafts.has(note.id) : false));
     const online = useNotes((s) => s.online);
@@ -158,7 +181,8 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
     const showPreview = layout !== 'live';
     const showSplit = layout === 'split';
     const outlineVisible = !isMobile && outlineOpen && paneActive && headings.length > 0;
-    const defaultOutlineWidth = outlineVisible ? OUTLINE_WIDTH : 0;
+    // The outline now lives outside the content area, so it never eats editor width.
+    const defaultOutlineWidth = 0;
     const defaultContentWidth = Math.max(0, containerWidth - SPLIT_HANDLE_WIDTH - PREVIEW_BORDER_WIDTH - defaultOutlineWidth);
     const defaultEditorWidth = defaultContentWidth / 2;
     const defaultPreviewWidth = PREVIEW_BORDER_WIDTH + defaultOutlineWidth + defaultEditorWidth;
@@ -181,7 +205,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         setMobileOutlineOpen(false);
     }, [note?.id]);
     useLayoutEffect(() => {
-        const container = containerRef.current;
+        const container = contentRef.current;
         if (!container)
             return;
         const measure = () => {
@@ -256,6 +280,44 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         if (!view.dom.querySelector('.ink-note-search')?.contains(document.activeElement)) view.focus();
     }, [view]);
     const invalidateSyncAnchors = useSyncScroll(view, previewScrollerRef, settings.preview.syncScroll && showSplit);
+    // Scrolling down collapses the summary; scrolling up never reopens it (no bounce).
+    const markSummaryScroll = useCallback((scrollTop: number) => {
+        const tracker = summaryScrollRef.current;
+        // Layout/note switches move scrollTop themselves; absorb those events as a new baseline.
+        if (Date.now() < ignoreScrollUntilRef.current) {
+            tracker.last = scrollTop;
+            tracker.accumulated = 0;
+            return;
+        }
+        if (Date.now() > userScrollUntilRef.current) return;
+        const delta = scrollTop - tracker.last;
+        tracker.last = scrollTop;
+        if (delta <= 0) {
+            tracker.accumulated = 0;
+            return;
+        }
+        tracker.accumulated += delta;
+        if (tracker.accumulated < 40) return;
+        tracker.accumulated = 0;
+        setSummaryCollapseSignal((value) => value + 1);
+    }, []);
+    // Fresh layout or note: show the summary again and ignore the layout-driven scroll burst.
+    useEffect(() => {
+        summaryScrollRef.current = { last: 0, accumulated: 0 };
+        ignoreScrollUntilRef.current = Date.now() + 400;
+        setSummaryExpandSignal((value) => value + 1);
+    }, [layout, note?.id]);
+    // The note body centers inside the scroller minus its scrollbar; mirror that for the summary row.
+    useLayoutEffect(() => {
+        const measure = () => {
+            const scroller = showPreview ? previewScrollerRef.current : view?.scrollDOM;
+            const next = scroller ? Math.max(0, scroller.offsetWidth - scroller.clientWidth) : 0;
+            setScrollGutter((current) => current === next ? current : next);
+        };
+        measure();
+        const timer = window.setTimeout(measure, 400);
+        return () => window.clearTimeout(timer);
+    }, [layout, view, note?.id, showPreview]);
     const jumpToHeading = useCallback((heading: Heading) => {
         if (view && showEditor) {
             const line = Math.min(view.state.doc.lines, heading.line + 1);
@@ -317,6 +379,7 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
         ...(isMobile ? [
             { id: 'star', label: note.isStarred ? t("common.remove_from_favorites") : t("navigation.favorites"), checked: note.isStarred, onSelect: () => void patchNote(note.id, { isStarred: !note.isStarred }) },
             { id: 'backlinks', label: t("common.backlinks"), checked: backlinksOpen, onSelect: () => runServerOnly(toggleBacklinks) },
+            { id: 'note-settings', label: t("workspace.note_settings"), icon: <Settings2 size={13}/>, onSelect: () => setNoteSettingsOpen(true) },
         ] : []),
         serverOnlyItem('versions', t("common.version_history"), <History size={13}/>, () => openPanel('versions')),
         serverOnlyItem('share', t("workspace.share"), <Share2 size={13}/>, () => openPanel('share')),
@@ -487,6 +550,11 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
                 <Share2 size={14}/>
               </IconButton>
             </Tooltip>)}
+          {!isMobile && (<Tooltip label={t("workspace.note_settings")}>
+              <IconButton label={t("workspace.note_settings")} size="sm" active={noteSettingsOpen} onClick={() => setNoteSettingsOpen(true)}>
+                <Settings2 size={14}/>
+              </IconButton>
+            </Tooltip>)}
           {isMobile && (<Tooltip label={t("common.more_actions")} side="left">
               <IconButton ref={moreButtonRef} label={t("common.more_actions")} size="sm" onClick={() => setMoreMenuOpen(true)}>
                 <MoreHorizontal size={16}/>
@@ -498,19 +566,40 @@ export function Workspace({ onMobileBack, pane = 'active', grouped = false, }: {
 
       {settings.editor.showToolbar && showEditor && (<EditorToolbar runCommand={runEditorCommand} mobile={isMobile} onPickImage={() => fileInputRef.current?.click()}/>)}
 
+      <NoteSettingsDrawer
+        open={noteSettingsOpen}
+        onClose={() => setNoteSettingsOpen(false)}
+        noteId={note.id}
+        onChanged={() => setSummaryRefresh((value) => value + 1)}
+      />
+
       <div ref={containerRef} className={cn("relative flex min-h-0 flex-1", isMobile && "flex-col")} data-editor-layout={layout}>
-        {/* visibility keeps the editor measured; display:none would collapse CodeMirror's height cache. */}
-        <div inert={!showEditor} aria-hidden={!showEditor} className={cn("min-h-0 min-w-0", !showEditor && "pointer-events-none invisible absolute inset-0")} style={{ width: showSplit && !isMobile ? editorWidth : outlineVisible ? `calc(100% - ${OUTLINE_WIDTH}px)` : '100%', flex: showEditor && isMobile ? 1 : undefined }}>
-            <DeferredCodeEditor key={note.id} visible={showEditor} value={content} noteTitle={note.title} live={livePreviewActive} onHeadings={setHeadings} onChange={onChange} settings={settings.editor} sources={sources} handlers={handlers} onReady={onEditorReady}/>
+        <div ref={contentRef} className={cn("flex min-h-0 min-w-0 flex-1 flex-col")}>
+          {/* Editing layouts keep the summary above the panes; reading mode embeds it in the scroll flow. */}
+          {paneActive && layout !== 'preview' && (
+            <div
+              className="shrink-0 px-4"
+              style={{ width: layout === 'split' ? '100%' : `calc(100% - ${scrollGutter}px)` }}
+            >
+              <div className={layout === 'split' ? 'w-full' : 'summary-measure mx-auto'}>
+                <SummaryPanel noteId={note.id} updatedAt={note.updatedAt} disabled={serverOnlyDisabled} editable collapseSignal={summaryCollapseSignal} expandSignal={summaryExpandSignal} refreshToken={summaryRefresh}/>
+              </div>
+            </div>
+          )}
+          <div className={cn("relative flex min-h-0 flex-1", isMobile && "flex-col")}>
+            {/* visibility keeps the editor measured; display:none would collapse CodeMirror's height cache. */}
+            <div inert={!showEditor} aria-hidden={!showEditor} className={cn("relative min-h-0 min-w-0 overflow-hidden", !showEditor && "pointer-events-none invisible absolute inset-0")} style={{ width: showSplit && !isMobile ? editorWidth : '100%', flex: showEditor && isMobile ? 1 : undefined }}>
+                <DeferredCodeEditor key={note.id} visible={showEditor} value={content} noteTitle={note.title} live={livePreviewActive} onHeadings={setHeadings} onChange={onChange} settings={settings.editor} sources={sources} handlers={handlers} onReady={onEditorReady}/>
+              </div>
+
+            {showSplit && !isMobile && (<SplitResizer label={t("workspace.resize_editor_and_preview_panes")} containerRef={contentRef} ratio={effectiveSplitRatio} onChange={(splitRatio) => setLayout({ splitRatio })} onReset={() => setLayout({ splitRatio: null })}/>)}
+
+            {showPreview && (<div className={cn('flex min-h-0 min-w-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--bg-editor)]', isMobile && layout === 'split' && 'flex-1 border-l-0 border-t', layout === 'preview' && 'flex-1 border-l-0')} style={{ width: layout === 'split' && !isMobile ? previewWidth : '100%' }}>
+                <Preview key={note.id} content={content} noteId={note.id} noteTitle={note.title} onHeadings={setHeadings} scrollerRef={previewScrollerRef} onRendered={invalidateSyncAnchors} onInitialRender={(scroller) => restoreReading(scroller, previewReadingKey)} onScroll={(scroller) => { saveReadingPosition(scroller, previewReadingKey); markSummaryScroll(scroller.scrollTop); }} onUserScroll={() => { userScrollUntilRef.current = Date.now() + 600; }} className="min-w-0 flex-1" header={paneActive && layout === 'preview' ? (<SummaryPanel noteId={note.id} updatedAt={note.updatedAt} disabled={serverOnlyDisabled} editable={false} expandSignal={summaryExpandSignal} refreshToken={summaryRefresh}/>) : undefined}/>
+              </div>)}
           </div>
-
-        {showSplit && !isMobile && (<SplitResizer label={t("workspace.resize_editor_and_preview_panes")} containerRef={containerRef} ratio={effectiveSplitRatio} onChange={(splitRatio) => setLayout({ splitRatio })} onReset={() => setLayout({ splitRatio: null })}/>)}
-
-        {showPreview && (<div className={cn('flex min-h-0 min-w-0 overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--bg-editor)]', isMobile && layout === 'split' && 'flex-1 border-l-0 border-t', layout === 'preview' && 'flex-1 border-l-0')} style={{ width: layout === 'split' && !isMobile ? previewWidth : '100%' }}>
-            <Preview key={note.id} content={content} noteId={note.id} noteTitle={note.title} onHeadings={setHeadings} scrollerRef={previewScrollerRef} onRendered={invalidateSyncAnchors} onInitialRender={(scroller) => restoreReading(scroller, previewReadingKey)} onScroll={(scroller) => saveReadingPosition(scroller, previewReadingKey)} className="min-w-0 flex-1"/>
-            {outlineVisible && (<Outline headings={headings} onSelect={jumpToHeading} scrollerRef={previewScrollerRef}/>)}
-          </div>)}
-        {!showPreview && outlineVisible && <Outline headings={headings} onSelect={jumpToHeading}/>}
+        </div>
+        {outlineVisible && <Outline headings={headings} onSelect={jumpToHeading} scrollerRef={showPreview ? previewScrollerRef : undefined}/>}
       </div>
 
       {backlinksOpen && paneActive && <BacklinksPanel noteId={note.id}/>}

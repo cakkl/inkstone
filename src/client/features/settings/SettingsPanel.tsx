@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { BrainCircuit, Cloud, Database, Info, Keyboard, Link2, Palette, RefreshCw, Type, UserRound, } from 'lucide-react';
+import { BrainCircuit, Cloud, Database, Info, Keyboard, Link2, Palette, RefreshCw, ShieldCheck, Sparkles, Type, UserRound, } from 'lucide-react';
 import { ACCENTS } from '@shared/constants';
 import { cn } from '../../lib/cn';
 import { useDialogFocus, useEscape, useLockScroll } from '../../components/overlay';
@@ -23,12 +23,15 @@ export const SECTIONS: {
     id: Section;
     label: () => string;
     icon: React.ReactNode;
+    ownerOnly?: boolean;
 }[] = [
     { id: 'appearance', label: () => t("settings.appearance"), icon: <Palette size={14}/> },
     { id: 'editor', label: () => t("settings.editor"), icon: <Type size={14}/> },
+    { id: 'aiSummary', label: () => t("settings.ai_summary"), icon: <Sparkles size={14}/> },
     { id: 'backup', label: () => t("settings.backup"), icon: <Cloud size={14}/> },
     { id: 'sync', label: () => t("settings.sync"), icon: <RefreshCw size={14}/> },
     { id: 'mcp', label: () => t("settings.mcp"), icon: <BrainCircuit size={14}/> },
+    { id: 'admin', label: () => t("settings.admin"), icon: <ShieldCheck size={14}/>, ownerOnly: true },
     { id: 'account', label: () => t("settings.account"), icon: <UserRound size={14}/> },
     { id: 'data', label: () => t("settings.data"), icon: <Database size={14}/> },
     { id: 'shares', label: () => t("share.shared_notes"), icon: <Link2 size={14}/> },
@@ -38,12 +41,17 @@ export function SettingsPanel({ onClose }: {
     onClose: () => void;
 }) {
     const userId = useSession((s) => s.user?.id);
+    const role = useSession((s) => s.user?.role);
+    const sections = useMemo(
+        () => SECTIONS.filter((item) => !item.ownerOnly || role === 'owner'),
+        [role],
+    );
     const online = useNotes((s) => s.online);
     const storageKey = `${UI_STORAGE_KEY}:settings-section:${userId ?? 'anonymous'}`;
     const [section, setSection] = useState<Section>(() => {
         try {
             const saved = localStorage.getItem(storageKey);
-            return SECTIONS.find((item) => item.id === saved)?.id ?? 'appearance';
+            return sections.find((item) => item.id === saved)?.id ?? 'appearance';
         } catch { return 'appearance'; }
     });
     const [visited, setVisited] = useState<Section[]>([section]);
@@ -68,7 +76,7 @@ export function SettingsPanel({ onClose }: {
         <nav className="flex w-full shrink-0 flex-col border-b border-[var(--border-subtle)] bg-[var(--bg-sunken)] p-2 md:w-[172px] md:border-r md:border-b-0">
           <div id={titleId} className="px-2 py-1.5 text-[13.5px] font-semibold tracking-[-0.012em] md:py-2.5">{t("common.settings")}</div>
           <div className="flex gap-1 overflow-x-auto pb-1 md:block md:space-y-px md:overflow-visible md:pb-0">
-            {SECTIONS.map((item) => (<button key={item.id} type="button" aria-current={section === item.id ? 'page' : undefined} onPointerEnter={() => warmSettingsSection(item.id)} onFocus={() => warmSettingsSection(item.id)} onClick={() => selectSection(item.id)} className={cn('flex h-10 shrink-0 items-center gap-2 rounded-[var(--r-md)] px-2.5 text-left text-[12.5px] md:h-[30px] md:w-full md:gap-2.5 md:px-2', 'transition-colors duration-[var(--dur-fast)]', section === item.id
+            {sections.map((item) => (<button key={item.id} type="button" aria-current={section === item.id ? 'page' : undefined} onPointerEnter={() => warmSettingsSection(item.id)} onFocus={() => warmSettingsSection(item.id)} onClick={() => selectSection(item.id)} className={cn('flex h-10 shrink-0 items-center gap-2 rounded-[var(--r-md)] px-2.5 text-left text-[12.5px] md:h-[30px] md:w-full md:gap-2.5 md:px-2', 'transition-colors duration-[var(--dur-fast)]', section === item.id
                 ? 'bg-[var(--accent-soft)] font-medium text-[var(--text-primary)]'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]')}>
                 <span className={cn('shrink-0', section === item.id ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]')}>
@@ -94,7 +102,7 @@ export function SettingsPanel({ onClose }: {
 
         { }
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <OverlayHeader title={SECTIONS.find((s) => s.id === section)?.label() ?? ''} onClose={onClose}/>
+          <OverlayHeader title={sections.find((s) => s.id === section)?.label() ?? ''} onClose={onClose}/>
 
           {visited.map((page) => (<div key={page} hidden={page !== section} inert={page !== section} aria-hidden={page !== section} className={cn('min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-[calc(16px+env(safe-area-inset-bottom))] md:px-5 md:py-4', page !== section && 'hidden')}>
             {page === 'appearance' ? <AppearancePage accents={ACCENTS}/> : !online && OFFLINE_BLOCKED_SECTIONS.has(page) ? (<Empty art="select" compact title={t('common.offline_unavailable')} description={t('settings.reconnect_to_load_this_section')}/>) : <SettingsPage section={page}/>}
