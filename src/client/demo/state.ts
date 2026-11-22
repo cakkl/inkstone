@@ -46,6 +46,8 @@ export interface DemoState {
   summaries: Map<string, DemoSampleSummary>
   /** AI 生成的待确认草稿：不覆盖用户已手写的摘要。 */
   summaryDrafts: Map<string, DemoSampleSummary>
+  /** 摘要历史版本，最新的在前。 */
+  summaryVersions: Map<string, DemoSampleSummary[]>
   summarySettings: Map<string, { summaryEnabled: boolean | null; aiMode: 'inherit' | 'enabled' | 'disabled'; autoGenerate: boolean | null }>
 }
 
@@ -113,6 +115,7 @@ export function createDemoState(): DemoState {
     backupRuns: [],
     summaries: new Map(),
     summaryDrafts: new Map(),
+    summaryVersions: new Map(),
     summarySettings: new Map(),
   }
 }

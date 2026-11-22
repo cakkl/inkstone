@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, Sparkles } from 'lucide-react'
-import type { AiNoteSummaryResponse } from '@shared/types'
+import { ChevronDown, History, Sparkles } from 'lucide-react'
+import type { AiNoteSummaryResponse, AiSummaryVersion } from '@shared/types'
 import { api, ApiError } from '../../lib/api'
 import { t } from '../../lib/i18n'
 import { cn } from '../../lib/cn'
@@ -9,6 +9,7 @@ import { Button, IconButton } from '../../components/primitives'
 import { Textarea } from '../../components/form'
 import { useUi } from '../../store/ui'
 import { useSession } from '../../store/session'
+import { SummaryHistoryDialog } from './SummaryHistoryDialog'
 
 /** 摘要面板：inline 时作为正文顶部一块，否则为独立面板；编辑模式下可改但需保存。 */
 export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, inline = false, collapseSignal, expandSignal, refreshToken, className }: {
@@ -32,11 +33,12 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
   const isMobile = useBreakpoint() === 'mobile'
   const [state, setState] = useState<AiNoteSummaryResponse | null>(null)
   const [open, setOpen] = useState(true)
-  const [busy, setBusy] = useState<'generate' | 'save' | 'accept' | null>(null)
+  const [busy, setBusy] = useState<'generate' | 'save' | 'accept' | 'restore' | null>(null)
   /** null means untouched: show the saved text; leaving edit mode discards it. */
   const [draft, setDraft] = useState<string | null>(null)
   /** null means untouched AI draft; a string holds the user's tweaks. */
   const [draftEdit, setDraftEdit] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const loadedNoteRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -44,6 +46,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       // Read mode is view-only: drop both the typed text and any draft tweaks.
       setDraft(null)
       setDraftEdit(null)
+      setHistoryOpen(false)
     }
   }, [editable])
 
@@ -70,6 +73,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       setDraft(null)
       setDraftEdit(null)
       setBusy(null)
+      setHistoryOpen(false)
     }
     const timer = window.setTimeout(() => {
       api.notes
@@ -168,6 +172,16 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
     }
   }, [busy, noteId, reportFailure, toast])
 
+  const restoreVersion = useCallback(async (version: AiSummaryVersion) => {
+    try {
+      setState(await api.notes.restoreSummaryVersion(noteId, version.id))
+      setDraft(null)
+      toast({ title: t('summary.history_restored') })
+    } catch (error) {
+      reportFailure(error)
+    }
+  }, [noteId, reportFailure, toast])
+
   if (!state?.visible) return null
 
   const summary = state.summary
@@ -195,10 +209,10 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       )}
       data-summary-panel
     >
-      <div className={cn('flex items-center gap-2', inline ? 'py-1' : 'px-3 py-1.5')}>
+      <div className={cn('flex items-center gap-1.5', inline ? 'py-1' : 'px-3 py-1.5')}>
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px] font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="flex min-w-0 items-center gap-1.5 text-left text-[12px] font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
           onClick={() => setOpen(!open)}
           aria-expanded={expanded}
         >
@@ -208,25 +222,37 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
             size={13}
             className={cn('shrink-0 text-[var(--text-quaternary)] transition-transform', expanded && 'rotate-180')}
           />
-          {generating && <span className="summary-shimmer min-w-0 truncate text-[11.5px]">{t('summary.generating')}</span>}
-          {!generating && pending && (
-            <span className="min-w-0 truncate text-[11.5px] text-[var(--accent)]">
-              {editable ? t('summary.draft_pending') : t('summary.draft_pending_readonly')}
-            </span>
-          )}
-          {!generating && !pending && (
-            <span className={cn(
-              'min-w-0 truncate text-[11.5px] font-normal',
-              summary?.status === 'outdated' ? 'text-[var(--warning)]' : 'text-[var(--text-quaternary)]',
-            )}>
-              {summary
+        </button>
+        <span className={cn(
+          'min-w-0 flex-1 truncate text-[11.5px] font-normal',
+          summary?.status === 'outdated' ? 'text-[var(--warning)]' : 'text-[var(--text-quaternary)]',
+        )}>
+          {generating
+            ? <span className="summary-shimmer">{t('summary.generating')}</span>
+            : pending
+              ? <span className="text-[var(--accent)]">{editable ? t('summary.draft_pending') : t('summary.draft_pending_readonly')}</span>
+              : summary
                 ? summary.status === 'outdated'
                   ? t('summary.outdated')
                   : summary.origin === 'user' ? t('summary.origin_user') : t('summary.origin_ai')
                 : emptyHint}
-            </span>
-          )}
-        </button>
+        </span>
+        {editable && summary && (isMobile ? (
+          <IconButton label={t('summary.history')} size="sm" disabled={busy !== null} onClick={() => setHistoryOpen(true)}>
+            <History size={13} />
+          </IconButton>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0 whitespace-nowrap"
+            icon={<History size={12} />}
+            disabled={busy !== null}
+            onClick={() => setHistoryOpen(true)}
+          >
+            {t('summary.history')}
+          </Button>
+        ))}
         {editable && state.canGenerate && (isMobile ? (
           <IconButton
             label={generateLabel}
@@ -240,7 +266,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
           <Button
             size="sm"
             variant="ghost"
-            className="whitespace-nowrap"
+            className="shrink-0 whitespace-nowrap"
             icon={<Sparkles size={12} />}
             loading={generating}
             disabled={generateDisabled}
@@ -346,6 +372,13 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
           )}
         </div>
       )}
+
+      <SummaryHistoryDialog
+        noteId={noteId}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onRestore={restoreVersion}
+      />
     </section>
   )
 }

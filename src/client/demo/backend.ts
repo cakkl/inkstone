@@ -326,7 +326,33 @@ export function createDemoBackend(): DemoBackend {
     }
     // 与真实后端一致：手写摘要不被覆盖，生成结果先存成待确认草稿。
     if (state.summaries.get(id)?.origin === 'user') state.summaryDrafts.set(id, generated)
-    else state.summaries.set(id, generated)
+    else {
+      pushDemoSummaryVersion(state, id)
+      state.summaries.set(id, generated)
+    }
+    return c.json(demoSummaryResponse(state, id))
+  })
+
+  app.get('/api/notes/:id/summary/versions', (c) => {
+    const versions = state.summaryVersions.get(c.req.param('id')) ?? []
+    return c.json({
+      versions: versions.map((entry, index) => ({
+        id: `demo-summary-v${index}`,
+        text: entry.text,
+        origin: entry.origin,
+        operation: 'replace',
+        createdAt: entry.updatedAt,
+      })),
+    })
+  })
+
+  app.post('/api/notes/:id/summary/versions/:versionId/restore', (c) => {
+    const id = c.req.param('id')
+    const index = Number(c.req.param('versionId').replace('demo-summary-v', ''))
+    const version = state.summaryVersions.get(id)?.[index]
+    if (!version) return apiError(404, 'not_found', 'Version not found')
+    pushDemoSummaryVersion(state, id)
+    state.summaries.set(id, { ...version, updatedAt: Date.now() })
     return c.json(demoSummaryResponse(state, id))
   })
 
@@ -334,6 +360,7 @@ export function createDemoBackend(): DemoBackend {
     const id = c.req.param('id')
     const pending = state.summaryDrafts.get(id)
     if (pending) {
+      pushDemoSummaryVersion(state, id)
       state.summaries.set(id, pending)
       state.summaryDrafts.delete(id)
     }
@@ -352,6 +379,7 @@ export function createDemoBackend(): DemoBackend {
     if (typeof body.text !== 'string' || !body.text.trim()) {
       return apiError(400, 'bad_request', 'Summary text cannot be empty')
     }
+    pushDemoSummaryVersion(state, id)
     state.summaries.set(id, {
       text: body.text.trim(),
       origin: 'user',
@@ -365,6 +393,7 @@ export function createDemoBackend(): DemoBackend {
   app.delete('/api/notes/:id/summary', (c) => {
     state.summaries.delete(c.req.param('id'))
     state.summaryDrafts.delete(c.req.param('id'))
+    state.summaryVersions.delete(c.req.param('id'))
     return c.json({ ok: true })
   })
 
@@ -1620,6 +1649,14 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
   const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
   return [...digest].map((value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+/** 新的摘要写入前把旧内容留档，与真实后端的版本表对应。 */
+function pushDemoSummaryVersion(state: DemoState, noteId: string) {
+  const current = state.summaries.get(noteId)
+  if (!current) return
+  const list = state.summaryVersions.get(noteId) ?? []
+  state.summaryVersions.set(noteId, [current, ...list].slice(0, 20))
 }
 
 /** 演示环境的摘要响应：策略固定为「摘要跟随内容、AI 可用、自动关」。 */
