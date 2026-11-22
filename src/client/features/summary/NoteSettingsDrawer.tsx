@@ -5,8 +5,10 @@ import { api } from '../../lib/api'
 import { t } from '../../lib/i18n'
 import { Drawer, confirm } from '../../components/overlay'
 import { Segmented } from '../../components/form'
+import { LoadingBlock } from '../../components/feedback'
 import { useUi } from '../../store/ui'
 import { useSession } from '../../store/session'
+import { readCachedSummary, writeCachedSummary } from './summary-cache'
 
 type Tri = 'inherit' | 'on' | 'off'
 type Page = 'root' | 'summary'
@@ -31,6 +33,7 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
   const [state, setState] = useState<AiNoteSummaryResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [page, setPage] = useState<Page>('root')
+  const userId = useSession((s) => s.user?.id)
 
   useEffect(() => {
     if (!open) {
@@ -38,16 +41,20 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
       return
     }
     let cancelled = false
+    // 切笔记先替掉上一篇的状态：命中快照直接用，没快照就显示加载态。
+    setState(readCachedSummary(userId, noteId, { allowStale: true }))
     api.notes
       .summary(noteId)
       .then((next) => {
-        if (!cancelled) setState(next)
+        if (cancelled) return
+        setState(next)
+        writeCachedSummary(userId, noteId, next)
       })
       .catch(() => undefined)
     return () => {
       cancelled = true
     }
-  }, [open, noteId])
+  }, [open, noteId, userId])
 
   const apply = async (patch: Parameters<typeof api.notes.setSummarySettings>[1]) => {
     if (busy) return
@@ -55,6 +62,7 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
     try {
       const next = await api.notes.setSummarySettings(noteId, patch)
       setState(next)
+      writeCachedSummary(userId, noteId, next)
       onChanged()
       toast({ title: t('summary.saved') })
     } catch {
@@ -78,9 +86,15 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
   }
 
   const summaryState = toTri(state?.settings.summaryEnabled)
-  const statusText = summaryState === 'off'
-    ? t('workspace.note_off')
-    : state?.visible ? t('workspace.note_on') : t('workspace.note_summary_auto')
+  // 状态未到时显示加载中，别把上一篇的结论并到当前笔记上。
+  const statusText =
+    state === null
+      ? t('common.loading')
+      : summaryState === 'off'
+        ? t('workspace.note_off')
+        : state.visible
+          ? t('workspace.note_on')
+          : t('workspace.note_summary_auto')
 
   return (
     <Drawer open={open} onClose={onClose} side="right" width={340} title={t('workspace.note_settings')}>
@@ -109,59 +123,65 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
             {t('workspace.note_settings')}
           </button>
 
-          <div className="space-y-2">
-            <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
-              {t('workspace.note_summary_section')}
-            </h3>
-            <Segmented
-              value={summaryState}
-              disabled={busy}
-              onChange={(value) => void changeSummary(value)}
-              options={[
-                { value: 'inherit', label: t('workspace.note_summary_auto') },
-                { value: 'on', label: t('workspace.note_on') },
-                { value: 'off', label: t('workspace.note_off') },
-              ]}
-            />
-            <p className="text-[11.5px] leading-relaxed text-[var(--text-tertiary)]">
-              {t('workspace.note_summary_hint')}
-            </p>
-          </div>
-
-          {instanceAiEnabled && (
+          {state === null ? (
+            <LoadingBlock />
+          ) : (
             <>
-              <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+              <div className="space-y-2">
                 <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
-                  {t('workspace.note_ai_section')}
+                  {t('workspace.note_summary_section')}
                 </h3>
                 <Segmented
-                  value={aiToTri(state?.settings.aiMode)}
+                  value={summaryState}
                   disabled={busy}
-                  onChange={(value) => void changeAi(value)}
+                  onChange={(value) => void changeSummary(value)}
                   options={[
                     { value: 'inherit', label: t('workspace.note_summary_auto') },
                     { value: 'on', label: t('workspace.note_on') },
                     { value: 'off', label: t('workspace.note_off') },
                   ]}
                 />
+                <p className="text-[11.5px] leading-relaxed text-[var(--text-tertiary)]">
+                  {t('workspace.note_summary_hint')}
+                </p>
               </div>
 
-              {instanceAuto && (
-                <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
-                  <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
-                    {t('workspace.note_auto_section')}
-                  </h3>
-                  <Segmented
-                    value={toTri(state?.settings.autoGenerate)}
-                    disabled={busy}
-                    onChange={(value) => void apply({ autoGenerate: fromTri(value) })}
-                    options={[
-                      { value: 'inherit', label: t('workspace.note_summary_auto') },
-                      { value: 'on', label: t('workspace.note_on') },
-                      { value: 'off', label: t('workspace.note_off') },
-                    ]}
-                  />
-                </div>
+              {instanceAiEnabled && (
+                <>
+                  <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+                    <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
+                      {t('workspace.note_ai_section')}
+                    </h3>
+                    <Segmented
+                      value={aiToTri(state.settings.aiMode)}
+                      disabled={busy}
+                      onChange={(value) => void changeAi(value)}
+                      options={[
+                        { value: 'inherit', label: t('workspace.note_summary_auto') },
+                        { value: 'on', label: t('workspace.note_on') },
+                        { value: 'off', label: t('workspace.note_off') },
+                      ]}
+                    />
+                  </div>
+
+                  {instanceAuto && (
+                    <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+                      <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
+                        {t('workspace.note_auto_section')}
+                      </h3>
+                      <Segmented
+                        value={toTri(state.settings.autoGenerate)}
+                        disabled={busy}
+                        onChange={(value) => void apply({ autoGenerate: fromTri(value) })}
+                        options={[
+                          { value: 'inherit', label: t('workspace.note_summary_auto') },
+                          { value: 'on', label: t('workspace.note_on') },
+                          { value: 'off', label: t('workspace.note_off') },
+                        ]}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
