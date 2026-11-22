@@ -282,11 +282,15 @@ export function createDemoBackend(): DemoBackend {
     return c.json({ ok: true as const, cursor: state.cursor })
   })
   app.get('/api/settings/ai-summary', (c) =>
-    c.json({ enabled: true, allowAutoGenerate: false, queueDepth: 0 }),
+    c.json({ ...state.aiSummaryInstance, queueDepth: 0 }),
   )
   app.put('/api/settings/ai-summary', async (c) => {
-    await jsonBody(c.req.raw)
-    return c.json({ enabled: true, allowAutoGenerate: false })
+    const body = await jsonBody(c.req.raw) as { enabled?: unknown; allowAutoGenerate?: unknown }
+    if (typeof body.enabled === 'boolean') state.aiSummaryInstance.enabled = body.enabled
+    if (typeof body.allowAutoGenerate === 'boolean') {
+      state.aiSummaryInstance.allowAutoGenerate = body.allowAutoGenerate
+    }
+    return c.json({ ...state.aiSummaryInstance })
   })
   app.post('/api/settings/ai-summary/backfill', (c) => {
     const missing = [...state.notes.values()].filter((note) => !note.deletedAt && !state.summaries.has(note.id)).length
@@ -1111,8 +1115,8 @@ function siteInfo(state: DemoState) {
     attachmentStorage: null,
     realtimeEnabled: false,
     version: APP_VERSION,
-    // 演示环境用本地模拟回复，开关保持开启以便测试摘要流程。
-    aiSummary: { enabled: true, allowAutoGenerate: false },
+    // 演示环境用本地模拟回复；实例开关可在「管理」页切换。
+    aiSummary: { ...state.aiSummaryInstance },
   } as const
 }
 
@@ -1674,8 +1678,8 @@ function demoSummaryResponse(state: DemoState, noteId: string) {
   const flags = state.summarySettings.get(noteId) ?? { summaryEnabled: null, aiMode: 'inherit' as const, autoGenerate: null }
   const sample = state.summaries.get(noteId)
   const pending = state.summaryDrafts.get(noteId)
-  const canGenerate = flags.aiMode !== 'disabled'
-  const autoEligible = canGenerate && flags.autoGenerate === true
+  const canGenerate = state.aiSummaryInstance.enabled && flags.aiMode !== 'disabled'
+  const autoEligible = canGenerate && state.aiSummaryInstance.allowAutoGenerate && flags.autoGenerate === true
   const visible = flags.summaryEnabled ?? (Boolean(sample) || autoEligible)
   return {
     summary: sample
@@ -1704,6 +1708,8 @@ function demoSummaryResponse(state: DemoState, noteId: string) {
     visible,
     canGenerate,
     autoEligible,
+    // 演示环境没有真正的队列：开启自动生成就当作已排入，便于展示「今晚」文案。
+    queued: autoEligible,
     settings: flags,
   }
 }

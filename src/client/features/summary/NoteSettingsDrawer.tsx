@@ -6,6 +6,7 @@ import { t } from '../../lib/i18n'
 import { Drawer, confirm } from '../../components/overlay'
 import { Segmented } from '../../components/form'
 import { useUi } from '../../store/ui'
+import { useSession } from '../../store/session'
 
 type Tri = 'inherit' | 'on' | 'off'
 type Page = 'root' | 'summary'
@@ -23,6 +24,10 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
   onChanged: () => void
 }) {
   const toast = useUi((s) => s.toast)
+  /** 实例关闭 AI 摘要后，这两段开关没有意义，直接不渲染。 */
+  const instanceAiEnabled = useSession((s) => s.site?.aiSummary.enabled ?? true)
+  /** 实例不允许自动摘要时，单篇的「自动生成」也不会生效。 */
+  const instanceAuto = useSession((s) => s.site?.aiSummary.allowAutoGenerate ?? true)
   const [state, setState] = useState<AiNoteSummaryResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [page, setPage] = useState<Page>('root')
@@ -123,37 +128,43 @@ export function NoteSettingsDrawer({ open, onClose, noteId, onChanged }: {
             </p>
           </div>
 
-          <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
-            <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
-              {t('workspace.note_ai_section')}
-            </h3>
-            <Segmented
-              value={aiToTri(state?.settings.aiMode)}
-              disabled={busy}
-              onChange={(value) => void changeAi(value)}
-              options={[
-                { value: 'inherit', label: t('workspace.note_summary_auto') },
-                { value: 'on', label: t('workspace.note_on') },
-                { value: 'off', label: t('workspace.note_off') },
-              ]}
-            />
-          </div>
+          {instanceAiEnabled && (
+            <>
+              <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+                <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
+                  {t('workspace.note_ai_section')}
+                </h3>
+                <Segmented
+                  value={aiToTri(state?.settings.aiMode)}
+                  disabled={busy}
+                  onChange={(value) => void changeAi(value)}
+                  options={[
+                    { value: 'inherit', label: t('workspace.note_summary_auto') },
+                    { value: 'on', label: t('workspace.note_on') },
+                    { value: 'off', label: t('workspace.note_off') },
+                  ]}
+                />
+              </div>
 
-          <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
-            <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
-              {t('workspace.note_auto_section')}
-            </h3>
-            <Segmented
-              value={toTri(state?.settings.autoGenerate)}
-              disabled={busy}
-              onChange={(value) => void apply({ autoGenerate: fromTri(value) })}
-              options={[
-                { value: 'inherit', label: t('workspace.note_summary_auto') },
-                { value: 'on', label: t('workspace.note_on') },
-                { value: 'off', label: t('workspace.note_off') },
-              ]}
-            />
-          </div>
+              {instanceAuto && (
+                <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+                  <h3 className="px-1 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-quaternary)]">
+                    {t('workspace.note_auto_section')}
+                  </h3>
+                  <Segmented
+                    value={toTri(state?.settings.autoGenerate)}
+                    disabled={busy}
+                    onChange={(value) => void apply({ autoGenerate: fromTri(value) })}
+                    options={[
+                      { value: 'inherit', label: t('workspace.note_summary_auto') },
+                      { value: 'on', label: t('workspace.note_on') },
+                      { value: 'off', label: t('workspace.note_off') },
+                    ]}
+                  />
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </Drawer>

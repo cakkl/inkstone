@@ -49,6 +49,8 @@ export interface DemoState {
   /** 摘要历史版本，最新的在前。 */
   summaryVersions: Map<string, DemoSampleSummary[]>
   summarySettings: Map<string, { summaryEnabled: boolean | null; aiMode: 'inherit' | 'enabled' | 'disabled'; autoGenerate: boolean | null }>
+  /** 实例级 AI 摘要开关：关闭后相关设置项在界面上隐藏。 */
+  aiSummaryInstance: { enabled: boolean; allowAutoGenerate: boolean }
 }
 
 export interface DemoSampleSummary {
@@ -123,6 +125,7 @@ export function createDemoState(): DemoState {
     summaryDrafts: new Map(),
     summaryVersions: new Map(),
     summarySettings: new Map(),
+    aiSummaryInstance: { enabled: true, allowAutoGenerate: false },
   }
 }
 

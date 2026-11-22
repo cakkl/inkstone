@@ -243,6 +243,9 @@ export const useSession = create<SessionState>((set, get) => ({
       await pendingSessionCache.catch(() => {})
       await localDb.clear()
       await clearAttachmentCache()
+      // 摘要快照存在 localStorage 里，登出必须一并清掉。
+      const { clearSummaryCache } = await import('../features/summary/summary-cache')
+      clearSummaryCache()
       set({ status: 'anonymous', user: null, settings: DEFAULT_SETTINGS })
       location.reload()
     })()

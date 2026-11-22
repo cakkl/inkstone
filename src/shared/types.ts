@@ -222,6 +222,8 @@ export interface AiNoteSummaryResponse {
   canGenerate: boolean
   /** 是否允许自动生成（夜间排队）。 */
   autoEligible: boolean
+  /** 这篇笔记是否真的已排入自动生成队列。 */
+  queued: boolean
   /** 单篇设置，用于笔记设置抽屉回显。 */
   settings: {
     summaryEnabled: boolean | null

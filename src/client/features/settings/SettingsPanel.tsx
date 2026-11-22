@@ -42,9 +42,12 @@ export function SettingsPanel({ onClose }: {
 }) {
     const userId = useSession((s) => s.user?.id);
     const role = useSession((s) => s.user?.role);
+    /** 实例关掉 AI 摘要后，这一页没有可用的设置项，直接不列出。 */
+    const instanceAiEnabled = useSession((s) => s.site?.aiSummary.enabled ?? true);
     const sections = useMemo(
-        () => SECTIONS.filter((item) => !item.ownerOnly || role === 'owner'),
-        [role],
+        () => SECTIONS.filter((item) => (!item.ownerOnly || role === 'owner')
+            && (item.id !== 'aiSummary' || instanceAiEnabled)),
+        [role, instanceAiEnabled],
     );
     const online = useNotes((s) => s.online);
     const storageKey = `${UI_STORAGE_KEY}:settings-section:${userId ?? 'anonymous'}`;
@@ -68,6 +71,10 @@ export function SettingsPanel({ onClose }: {
     useLockScroll(true);
     useDialogFocus(true, panelRef);
     useEffect(() => scheduleSettingsWarmup(200), []);
+    // 实例运行中关掉 AI 摘要时，正在看的那一页会消失，回落到外观页。
+    useEffect(() => {
+        if (!sections.some((item) => item.id === section)) setSection('appearance');
+    }, [sections, section]);
     return createPortal(<div className="app-viewport-fixed fixed z-[210] flex items-center justify-center md:p-8">
       <div className="anim-fade absolute inset-0 bg-[var(--scrim)]" onClick={onClose} aria-hidden="true"/>
 

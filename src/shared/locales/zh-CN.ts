@@ -1098,7 +1098,7 @@ export const ZH_CN_MESSAGES = {
   "summary.empty": "还没有摘要。生成时会把这篇笔记的正文发送给已配置的 AI 服务。",
   "summary.empty_manual_only": "写下这篇笔记的摘要。",
   "summary.empty_can_generate": "写下摘要，或用右上角的按钮让 AI 生成。",
-  "summary.empty_auto": "将在今晚自动生成，也可以现在生成。",
+  "summary.empty_auto": "已排入今晚的自动生成，也可以现在生成。",
   "summary.offline": "离线状态下无法生成摘要，联网后再试。",
   "summary.generating": "正在生成摘要…",
   "summary.draft_question": "是否更换为这版？",

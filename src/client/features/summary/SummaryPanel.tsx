@@ -11,6 +11,7 @@ import { useUi } from '../../store/ui'
 import { useSession } from '../../store/session'
 import { SummaryComposeDialog } from './SummaryComposeDialog'
 import { SummaryHistoryDialog } from './SummaryHistoryDialog'
+import { readCachedSummary, writeCachedSummary } from './summary-cache'
 
 /** 摘要面板：inline 时作为正文顶部一块，否则为独立面板；编辑模式下可改但需保存。 */
 export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, inline = false, collapseSignal, expandSignal, refreshToken, className }: {
@@ -31,8 +32,13 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
 }) {
   const toast = useUi((state) => state.toast)
   const aiSettings = useSession((state) => state.settings.aiSummary)
+  /** 缓存按用户隔离，切换账号不会把别人的摘要顶上来。 */
+  const userId = useSession((state) => state.user?.id)
+  const siteAiEnabled = useSession((state) => state.site?.aiSummary.enabled ?? true)
   const isMobile = useBreakpoint() === 'mobile'
   const [state, setState] = useState<AiNoteSummaryResponse | null>(null)
+  /** 首次拿数据期间先占位，避免摘要区在正文之后才插进来把内容顶下去。 */
+  const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(true)
   const [busy, setBusy] = useState<'generate' | 'save' | 'accept' | 'restore' | null>(null)
   /** null means untouched: show the saved text; leaving edit mode discards it. */
@@ -74,7 +80,10 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
     const newNote = loadedNoteRef.current !== noteId
     if (newNote) {
       loadedNoteRef.current = noteId
-      setState(null)
+      // 先用上次的快照顶上（含过期快照），让摘要与正文一起出现；请求返回后再覆盖。
+      const cached = readCachedSummary(userId, noteId, { allowStale: true })
+      setState(cached)
+      setLoading(cached === null)
       setDraft(null)
       setDraftEdit(null)
       setBusy(null)
@@ -86,14 +95,18 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
         .summary(noteId, controller.signal)
         .then((next) => {
           setState(next)
+          setLoading(false)
+          writeCachedSummary(userId, noteId, next)
         })
-        .catch(() => undefined)
+        .catch(() => {
+          setLoading(false)
+        })
     }, newNote ? 0 : 800)
     return () => {
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [noteId, updatedAt, refreshToken, aiSettings.enabled, aiSettings.autoGenerate])
+  }, [noteId, updatedAt, refreshToken, aiSettings.enabled, aiSettings.autoGenerate, siteAiEnabled, userId])
 
   const reportFailure = useCallback((error: unknown) => {
     if (error instanceof ApiError && error.isOffline) {
@@ -117,6 +130,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       const next = await api.notes.generateSummary(target, { mode, instruction: text })
       if (noteRef.current !== target) return
       setState(next)
+      writeCachedSummary(useSession.getState().user?.id, target, next)
       setOpen(true)
       setDraft(null)
       setComposerOpen(false)
@@ -138,6 +152,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       const next = await api.notes.saveSummary(target, text)
       if (noteRef.current !== target) return
       setState(next)
+      writeCachedSummary(useSession.getState().user?.id, target, next)
       setDraft(null)
       toast({ title: t('summary.saved') })
     } catch (error) {
@@ -161,10 +176,12 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
         const next = await api.notes.discardSummaryDraft(target)
         if (noteRef.current !== target) return
         setState(next)
+        writeCachedSummary(useSession.getState().user?.id, target, next)
       } else {
         const next = await api.notes.acceptSummaryDraft(target)
         if (noteRef.current !== target) return
         setState(next)
+        writeCachedSummary(useSession.getState().user?.id, target, next)
       }
       setDraftEdit(null)
       setDraft(null)
@@ -184,6 +201,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       const next = await api.notes.discardSummaryDraft(target)
       if (noteRef.current !== target) return
       setState(next)
+      writeCachedSummary(useSession.getState().user?.id, target, next)
       setDraftEdit(null)
       toast({ title: t('summary.deleted') })
     } catch (error) {
@@ -199,6 +217,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       const next = await api.notes.restoreSummaryVersion(target, version.id)
       if (noteRef.current !== target) return
       setState(next)
+      writeCachedSummary(useSession.getState().user?.id, target, next)
       setDraft(null)
       toast({ title: t('summary.history_restored') })
     } catch (error) {
@@ -206,7 +225,12 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
     }
   }, [noteId, reportFailure, toast])
 
-  if (!state?.visible) return null
+  if (!state) {
+    // 加载中就占位（不显示业务按钮），避免面板凭空弹出、把正文顶下去。
+    if (!loading || !aiSettings.enabled || !siteAiEnabled) return null
+    return <SummarySkeleton inline={inline} className={className} />
+  }
+  if (!state.visible) return null
 
   const summary = state.summary
   const pending = state.draft ?? null
@@ -219,9 +243,12 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
   const generateDisabled = disabled || busy !== null || state.remainingNeurons === 0
   const quotaHint = state.remainingNeurons === 0 ? t('summary.quota') : undefined
   const draftDirty = draftEdit !== null && pending !== null && draftEdit.trim() !== pending.text.trim()
-  const emptyHint = !state.canGenerate
+  // 只有真在队列里才提示「今晚」：开启自动生成不会回头补生旧笔记。
+  // 实例或用户关掉 AI 后，缓存的 canGenerate 会过期，这里叠加实时开关。
+  const canGenerate = state.canGenerate && aiSettings.enabled && siteAiEnabled
+  const emptyHint = !canGenerate
     ? t('summary.empty_manual_only')
-    : state.autoEligible
+    : state.queued
       ? t('summary.empty_auto')
       : t('summary.empty_can_generate')
 
@@ -278,7 +305,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
             {t('summary.history')}
           </Button>
         ))}
-        {editable && state.canGenerate && (isMobile ? (
+        {editable && canGenerate && (isMobile ? (
           <IconButton
             label={generateLabel}
             size="sm"
@@ -412,6 +439,30 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
         onClose={() => setHistoryOpen(false)}
         onRestore={restoreVersion}
       />
+    </section>
+  )
+}
+
+/** 首屏占位：结构与真实面板一致，内容到位后原地替换，位置不跳。 */
+function SummarySkeleton({ inline, className }: { inline: boolean; className?: string }) {
+  return (
+    <section
+      className={cn(
+        'shrink-0',
+        inline ? 'bg-transparent' : 'border-b border-[var(--border-subtle)] bg-[var(--bg-editor)]',
+        className,
+      )}
+      aria-hidden
+      data-summary-skeleton
+    >
+      <div className={cn('flex items-center gap-1.5', inline ? 'py-1' : 'px-3 py-1.5')}>
+        <Sparkles size={13} className="shrink-0 text-[var(--text-quaternary)]" />
+        <span className="shrink-0 text-[12px] font-medium text-[var(--text-quaternary)]">{t('summary.title')}</span>
+      </div>
+      <div className={cn('space-y-1.5', inline ? 'pb-2' : 'px-3 pb-2.5')}>
+        <div className="h-3 w-11/12 animate-pulse rounded-[var(--r-sm)] bg-[var(--bg-hover)]" />
+        <div className="h-3 w-2/3 animate-pulse rounded-[var(--r-sm)] bg-[var(--bg-hover)]" />
+      </div>
     </section>
   )
 }
