@@ -330,8 +330,8 @@ export function createDemoBackend(): DemoBackend {
       ? `${existing.text.slice(0, 40)}… → ${instruction || snippet}`
       : snippet + (note.content.length > 120 ? '…' : '')
     const generated: DemoSampleSummary = { text, origin: 'ai', language: 'zh-CN', updatedAt: Date.now() }
-    // 与真实后端一致：显式智能生成或手写摘要时只存草稿，不直接覆盖。
-    if (body.mode || existing?.origin === 'user') state.summaryDrafts.set(id, generated)
+    // 与真实后端一致：已有摘要时显式智能生成只存草稿；无摘要则直接落库。
+    if ((body.mode && existing) || existing?.origin === 'user') state.summaryDrafts.set(id, generated)
     else {
       pushDemoSummaryVersion(state, id)
       state.summaries.set(id, generated)

@@ -54,6 +54,11 @@ settingsRoutes.post('/ai-summary/backfill', async (c) => {
   if (!settings.aiSummary.enabled || !settings.aiSummary.autoGenerate) {
     throw ApiError.badRequest('Enable automatic summaries first')
   }
+  // 实例不允许自动摘要时补投只会入队后被丢弃，直接拒绝更清楚。
+  const instance = await getAiSummarySettings(c.env.DB)
+  if (!instance.enabled || !instance.allowAutoGenerate) {
+    throw ApiError.badRequest('Automatic summaries are disabled for this instance')
+  }
   const result = await backfillMissingSummaries(c.env.DB, {
     userId: user.id,
     settingsRaw: user.settingsRaw,

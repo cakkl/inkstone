@@ -79,6 +79,7 @@ export function SummaryPanel({ noteId, updatedAt, disabled, editable = false, in
       setDraftEdit(null)
       setBusy(null)
       setHistoryOpen(false)
+      setComposerOpen(false)
     }
     const timer = window.setTimeout(() => {
       api.notes

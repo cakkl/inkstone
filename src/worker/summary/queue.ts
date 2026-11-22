@@ -133,7 +133,10 @@ export async function backfillMissingSummaries(
     ),
   )
 
-  await db.batch(statements.map((statement) => statement))
+  // D1 批里有条数上限，分批写而不是一次 2000 条。
+  for (let offset = 0; offset < statements.length; offset += 100) {
+    await db.batch(statements.slice(offset, offset + 100))
+  }
   return { candidates: results.length, queued: statements.length }
 }
 
