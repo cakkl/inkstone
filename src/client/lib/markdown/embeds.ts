@@ -226,6 +226,8 @@ export function extractHeadingSection(markdown: string, heading: string): string
 export function extractBlock(markdown: string, blockId: string): string | null {
   const safeId = blockId.replace(/[^A-Za-z0-9_-]/g, '')
   if (!safeId) return null
+  // safeId 已白名单过滤且经 escapeRegExp 转义，不存在正则注入。
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   const marker = new RegExp(`(?:^|\\s)\\^${escapeRegExp(safeId)}[ \\t]*$`)
   const lines = markdown.split(/\r?\n/)
   let fence: { char: string; length: number } | null = null

@@ -185,12 +185,14 @@ export function Segmented<T extends string>({
   const hasActiveOption = options.some((option) => option.value === value)
   const move = (index: number, key: string) => {
     if (!options.length) return
-    let next = index
-    if (key === 'ArrowRight' || key === 'ArrowDown') next = (index + 1) % options.length
-    else if (key === 'ArrowLeft' || key === 'ArrowUp') next = (index - 1 + options.length) % options.length
-    else if (key === 'Home') next = 0
-    else if (key === 'End') next = options.length - 1
-    else return
+    const last = options.length - 1
+    const next =
+      key === 'ArrowRight' || key === 'ArrowDown' ? (index + 1) % options.length
+        : key === 'ArrowLeft' || key === 'ArrowUp' ? (index - 1 + options.length) % options.length
+          : key === 'Home' ? 0
+            : key === 'End' ? last
+              : null
+    if (next === null) return
     onChange(options[next]!.value)
     buttonsRef.current[next]?.focus()
   }

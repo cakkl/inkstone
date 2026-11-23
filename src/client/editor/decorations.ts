@@ -9,7 +9,7 @@ const wikiMark = Decoration.mark({ class: 'cm-md-wikilink' })
 
 const TAG_RE = /(^|[\s(\uff08[\u3010>\u300c\u300e\uff0c,\u3001;\uff1b])#([\p{L}\p{N}_\-/·]{1,60})(?![\p{L}\p{N}_\-/·])/gu
 const WIKI_RE = /\[\[[^[\]\n]{1,200}\]\]/g
-const TASK_DONE_RE = /^((?:[ \t]*>[ \t]?)*[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[xX]\][ \t]+)(.*)$/
+const TASK_DONE_RE = /^([ \t>]*(?:[-*+]|\d+[.)])[ \t]+\[[xX]\][ \t]+)(.*)$/
 
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>()

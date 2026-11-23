@@ -890,6 +890,11 @@ function findContainerEnd(state: {
     eMarks: number[];
 }, startLine: number, endLine: number, markerLength: number): number {
     let depth = 1;
+    // markerLength 是数字（来自匹配到的冒号个数），拼进正则不可能引入字符注入。
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    const directiveOpen = new RegExp(`^:{${markerLength},}(?:\\s+(?:details|tabs)\\b|\\{tab-set\\})`);
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    const containerClose = new RegExp(`^:{${markerLength},}\\s*$`);
     let fence: {
         char: string;
         length: number;
@@ -907,9 +912,9 @@ function findContainerEnd(state: {
         }
         if (fence)
             continue;
-        if (new RegExp(`^:{${markerLength},}(?:\\s+(?:details|tabs)\\b|\\{tab-set\\})`).test(text))
+        if (directiveOpen.test(text))
             depth++;
-        else if (new RegExp(`^:{${markerLength},}\\s*$`).test(text) && --depth === 0)
+        else if (containerClose.test(text) && --depth === 0)
             return line;
     }
     return -1;
@@ -1010,6 +1015,9 @@ function findColonFenceEnd(state: {
     eMarks: number[];
 }, start: number, end: number, markerLength: number): number {
     let fence: { char: string; length: number } | null = null;
+    // markerLength 是数字，无法构造出有特殊含义的字符。
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    const closer = new RegExp(`^:{${markerLength},}\\s*$`);
     for (let line = start; line < end; line++) {
         const text = blockLine(state, line);
         const codeFence = /^(`{3,}|~{3,})/.exec(text);
@@ -1021,7 +1029,7 @@ function findColonFenceEnd(state: {
                 fence = null;
             continue;
         }
-        if (!fence && new RegExp(`^:{${markerLength},}\\s*$`).test(text))
+        if (!fence && closer.test(text))
             return line;
     }
     return -1;

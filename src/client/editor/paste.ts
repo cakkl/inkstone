@@ -210,7 +210,7 @@ export function htmlToMarkdown(html: string): string {
             case 'pre': {
                 const code = el.textContent ?? '';
                 const lang = /language-([a-z0-9+#-]+)/i.exec(el.querySelector('code')?.className ?? '')?.[1] ?? '';
-                const fence = '`'.repeat(Math.max(3, longestRun(code, '`') + 1));
+                const fence = '`'.repeat(Math.max(3, longestBacktickRun(code) + 1));
                 return `\n\n${fence}${lang}\n${code.replace(/\n$/, '')}\n${fence}\n\n`;
             }
             case 'blockquote':
@@ -239,7 +239,7 @@ export function htmlToMarkdown(html: string): string {
                 const rows = [...el.querySelectorAll('tr')];
                 if (!rows.length)
                     return children();
-                const cells = (row: Element) => [...row.querySelectorAll('th, td')].map((c) => (c.textContent ?? '').trim().replace(/\|/g, '\\|'));
+                const cells = (row: Element) => [...row.querySelectorAll('th, td')].map((c) => (c.textContent ?? '').trim().replace(/\\/g, '\\\\').replace(/\|/g, '\\|'));
                 const header = cells(rows[0]!);
                 const lines = [
                     `| ${header.join(' | ')} |`,
@@ -310,11 +310,11 @@ function safePastedHref(value: string, image: boolean): string | null {
 
 function inlineCode(value: string): string {
     const content = value.replace(/[\r\n]+/g, ' ');
-    const fence = '`'.repeat(Math.max(1, longestRun(content, '`') + 1));
+    const fence = '`'.repeat(Math.max(1, longestBacktickRun(content) + 1));
     const pad = /^(?:\s|`)|(?:\s|`)$/.test(content) ? ' ' : '';
     return `${fence}${pad}${content}${pad}${fence}`;
 }
 
-function longestRun(value: string, character: string): number {
-    return Math.max(0, ...[...value.matchAll(new RegExp(`${character}+`, 'g'))].map((match) => match[0].length));
+function longestBacktickRun(value: string): number {
+    return Math.max(0, ...[...value.matchAll(/`+/g)].map((match) => match[0].length));
 }

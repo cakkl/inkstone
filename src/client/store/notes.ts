@@ -579,7 +579,8 @@ export const useNotes = create<NotesState>((set, get) => ({
                             }
                         });
                     }
-                    if (restoredPending) {
+                    // 上面两个分支都会标记 restoredPending，这里必然为真，无需再判断。
+                    {
                         const pendingIds = new Set(outbox.map((item) => item.noteId));
                         for (const noteId of dirty.keys())
                             pendingIds.add(noteId);

@@ -42,7 +42,7 @@ export async function acquireLease(
     await db.prepare(
       `DELETE FROM app_meta WHERE key = ?1 AND json_extract(value, '$.token') = ?2`,
     ).bind(key, token).run().catch((error) => {
-      console.warn(`[inkstone] Task lock ${key} will release automatically after timeout:`, error)
+      console.warn('[inkstone] Task lock will release automatically after timeout:', key, error)
     })
   }) as LeaseRelease
   release.renew = renew

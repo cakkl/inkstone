@@ -67,10 +67,16 @@ export async function runScheduledBackups(env: Env): Promise<void> {
 
         const run = await runBackup(env, user.id, { trigger: 'cron' })
         console.log(
-          `[inkstone] Scheduled backup ${user.id}: ${run.status}, ${run.results.length} targets, ${run.bytes} bytes`,
+          '[inkstone] Scheduled backup:',
+          user.id,
+          run.status,
+          run.results.length,
+          'targets,',
+          run.bytes,
+          'bytes',
         )
       } catch (err) {
-        console.error(`[inkstone] User ${user.id} scheduled backup failed:`, err)
+        console.error('[inkstone] User scheduled backup failed:', user.id, err)
       }
     })
 
