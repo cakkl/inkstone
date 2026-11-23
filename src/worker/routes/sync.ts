@@ -6,6 +6,7 @@ import { NOTE_COLUMNS, toFolder, toNoteSummary, toTag, type FolderRow, type Note
 import { ApiError } from '../lib/errors'
 import { clampInt } from '../lib/request'
 import { requireAuth } from '../middleware/auth'
+import { attachNoteSummaries, loadNoteSummaryBundles } from '../summary/sync-rows'
 
 export const syncRoutes = new Hono<AppBindings>()
 
@@ -93,12 +94,15 @@ syncRoutes.get('/', requireAuth, async (c) => {
 
   for (const item of latest.values()) {
     if (item.op === 'delete') {
-      if (item.entity === 'note' || item.entity === 'folder' || item.entity === 'tag') {
+      // 摘要被删只意味着这篇没有摘要了，笔记本身仍在。
+      if (item.entity === 'summary') noteIds.push(item.id)
+      else if (item.entity === 'note' || item.entity === 'folder' || item.entity === 'tag') {
         deletions.push({ entity: item.entity, id: item.id })
       }
       continue
     }
-    if (item.entity === 'note') noteIds.push(item.id)
+    // 摘要变化要让客户端重取这条笔记，响应里会带上新的 summary 字段。
+    if (item.entity === 'note' || item.entity === 'summary') noteIds.push(item.id)
     else if (item.entity === 'folder') folderIds.push(item.id)
     else if (item.entity === 'tag') tagIds.push(item.id)
   }
@@ -161,6 +165,7 @@ syncRoutes.get('/', requireAuth, async (c) => {
   const gotTags = new Set(tags.map((t) => t.id))
   for (const id of tagIds) if (!gotTags.has(id)) deletions.push({ entity: 'tag', id })
 
+  const bundles = await loadNoteSummaryBundles(c.env.DB, userId, notes.map((note) => note.id))
   const body: SyncResponse = {
     cursor,
     full: false,
@@ -170,7 +175,7 @@ syncRoutes.get('/', requireAuth, async (c) => {
     settingsChanged,
     profileChanged,
     siteChanged,
-    notes: notes.map(toNoteSummary),
+    notes: attachNoteSummaries(notes.map(toNoteSummary), bundles),
     folders: folders.map(toFolder),
     tags: tags.map(toTag),
     links: await loadLinks(c.env.DB, userId, notes.map((note) => note.id)),
@@ -238,6 +243,7 @@ async function fullSnapshot(
   ])
   const pageNotes = notes.results.slice(0, LIMITS.syncBatchSize)
   const hasMore = notes.results.length > LIMITS.syncBatchSize
+  const bundles = await loadNoteSummaryBundles(db, userId, pageNotes.map((note) => note.id))
 
   return {
     cursor,
@@ -248,7 +254,7 @@ async function fullSnapshot(
     settingsChanged: true,
     profileChanged: true,
     siteChanged: true,
-    notes: pageNotes.map(toNoteSummary),
+    notes: attachNoteSummaries(pageNotes.map(toNoteSummary), bundles),
     folders: folders.results.map(toFolder),
     tags: tags.results.map(toTag),
     links: await loadLinks(db, userId, pageNotes.map((note) => note.id)),

@@ -1,0 +1,50 @@
+name: "CodeQL Advanced"
+
+# 只响应 main 的 push；PR 由 pull_request 事件覆盖，避免推分支时重复跑两遍。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 权限放在 job 级：security-events: write 只有上传结果需要，工作流级会让后续 job 一并继承。
+permissions: {}
+
+jobs:
+  analyze:
+    name: CodeQL Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 扫描 workflow 自身 YAML：表达式注入、权限过宽之类的问题靠它发现。
+          - language: actions
+            build-mode: none
+          # TS/JS 不需编译，直接按源码建模。
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@977e6ceaea7361825998245d787fa3b4d6b9e5df  # codeql-bundle-v2.27.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended 补默认集之外的规则；security-and-quality 再加可维护性提示。
+          queries: security-extended,security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@977e6ceaea7361825998245d787fa3b4d6b9e5df  # codeql-bundle-v2.27.0
+        with:
+          category: "/language:${{ matrix.language }}"

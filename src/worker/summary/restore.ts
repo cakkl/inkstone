@@ -1,5 +1,6 @@
 import { LIMITS } from '@shared/constants'
 import { summarySourceHash } from './service'
+import { notifySummaryChanged } from './sync-rows'
 
 export interface SummaryRestoreEntry {
   noteId: string
@@ -63,6 +64,7 @@ export async function restoreSummaries(input: {
         entry.evolved ? null : generatedAt,
       )
       .run()
+    await notifySummaryChanged(db, userId, targetId)
     restored += 1
   }
 

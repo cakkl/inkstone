@@ -164,6 +164,10 @@ export interface NoteSummary {
   createdAt: number
   updatedAt: number
   deletedAt: number | null
+  /** 随笔记同步的摘要本体；`null` 表示这篇没有摘要。 */
+  summary?: StoredNoteSummary | null
+  /** 单篇摘要设置，缺席时按默认（全跟随）处理。 */
+  summarySettings?: NoteSummarySettings
 }
 
 export interface Note extends NoteSummary {
@@ -195,6 +199,21 @@ export interface AiSummaryDraft {
 
 /** 智能生成的两种模式：补充现有摘要，或完全重写。 */
 export type SummaryDraftMode = 'fresh' | 'refine'
+
+/** 随笔记同步的摘要：只保留展示与判定需要的字段。 */
+export interface StoredNoteSummary {
+  text: string
+  origin: AiSummaryOrigin
+  status: AiSummaryStatus
+  updatedAt: number
+}
+
+/** 单篇摘要设置，随笔记同步供客户端本地推导策略。 */
+export interface NoteSummarySettings {
+  summaryEnabled: boolean | null
+  aiMode: AiSummaryNoteMode
+  autoGenerate: boolean | null
+}
 
 export interface AiSummaryVersion {
   id: string

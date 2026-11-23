@@ -1,4 +1,5 @@
 import { getMeta, setMeta } from '../db/metadata'
+import { notifySummaryChanged } from './sync-rows'
 
 /** 关闭 AI 摘要要真删内容，但不在设置请求里同步删几百篇：打标记，定时任务分批处理。 */
 const PURGE_KEY_PREFIX = 'ai_summary_purge:'
@@ -35,6 +36,7 @@ export async function purgeNoteSummary(db: D1Database, userId: string, noteId: s
     db.prepare(`DELETE FROM note_summary_versions WHERE note_id = ?1 AND user_id = ?2`).bind(noteId, userId),
     db.prepare(`DELETE FROM note_summary_queue WHERE note_id = ?1 AND user_id = ?2`).bind(noteId, userId),
   ])
+  await notifySummaryChanged(db, userId, noteId, 'delete')
 }
 
 /** 单篇关闭 AI 摘要：只删 AI 生成的，手写摘要与历史保留。 */
@@ -46,6 +48,7 @@ export async function purgeAiSummary(db: D1Database, userId: string, noteId: str
     db.prepare(`DELETE FROM note_summary_drafts WHERE note_id = ?1 AND user_id = ?2`).bind(noteId, userId),
     db.prepare(`DELETE FROM note_summary_queue WHERE note_id = ?1 AND user_id = ?2`).bind(noteId, userId),
   ])
+  await notifySummaryChanged(db, userId, noteId, 'delete')
 }
 
 /** 分批清理该用户全部 AI 摘要，返回删除行数；0 表示已清完（调用方据此清标记）。 */

@@ -1,0 +1,35 @@
+name: Verify
+
+# 类型检查、i18n、单元测试与构建的统一入口；本地复现用 `npm run verify`。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, i18n, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # 不把 GITHUB_TOKEN 写进 .git/config，防依赖的 postinstall 读到它。
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          # 版本单一来源：.nvmrc 同时被本 workflow 与 Workers Builds 读取。
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify (typecheck + i18n + tests + build)
+        run: npm run verify

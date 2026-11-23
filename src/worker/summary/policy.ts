@@ -1,6 +1,10 @@
 import { mergeSettings } from '@shared/constants'
+import { computeSummaryPolicy, type SummaryPolicy } from '@shared/summary-policy'
 import type { AiSummaryNoteMode } from '@shared/types'
 import { getAiSummarySettings } from '../lib/instance-settings'
+import { notifySummaryChanged } from './sync-rows'
+
+export type { SummaryPolicy }
 
 export interface NoteSummaryFlags {
   /** `null` 表示「未设置」，按内容与自动生成推导。 */
@@ -9,17 +13,6 @@ export interface NoteSummaryFlags {
   aiMode: AiSummaryNoteMode
   /** 单篇自动生成：`null` 表示跟随用户设置。 */
   autoGenerate: boolean | null
-}
-
-export interface SummaryPolicy extends NoteSummaryFlags {
-  instanceEnabled: boolean
-  userEnabled: boolean
-  /** 是否显示摘要区。 */
-  visible: boolean
-  /** 是否允许 AI 生成（手写不受影响）。 */
-  canGenerate: boolean
-  /** 是否允许自动生成（夜间排队）。 */
-  autoEligible: boolean
 }
 
 export function parseNoteMode(value: unknown): AiSummaryNoteMode {
@@ -84,9 +77,10 @@ export async function setNoteFlags(
       Date.now(),
     )
     .run()
+  await notifySummaryChanged(db, userId, noteId)
 }
 
-/** 唯一判定入口（路由/队列/前端共用）：有单篇设置用设置，否则有内容或会产出时显示。 */
+/** 判定入口（路由/队列共用）：读取三层设置后交给 `@shared/summary-policy` 算。 */
 export async function resolveSummaryPolicy(input: {
   db: D1Database
   userId: string
@@ -102,13 +96,10 @@ export async function resolveSummaryPolicy(input: {
     // Malformed settings fall back to defaults instead of failing the request.
   }
   const flags = await loadNoteFlags(input.db, input.userId, input.noteId)
-
-  const instanceEnabled = instance.enabled
-  const userEnabled = user.enabled
-  const canGenerate = instanceEnabled && userEnabled && flags.aiMode !== 'disabled'
-  const autoOn = flags.autoGenerate ?? user.autoGenerate
-  const autoEligible = canGenerate && instance.allowAutoGenerate && autoOn
-  const visible = flags.summaryEnabled ?? (input.hasSummary || autoEligible)
-
-  return { ...flags, instanceEnabled, userEnabled, visible, canGenerate, autoEligible }
+  return computeSummaryPolicy({
+    instance,
+    user: { enabled: user.enabled, autoGenerate: user.autoGenerate },
+    note: flags,
+    hasSummary: input.hasSummary,
+  })
 }

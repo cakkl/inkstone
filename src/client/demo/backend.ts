@@ -23,6 +23,7 @@ import type {
   ImportResult,
   McpSettingsInfo,
   Note,
+  NoteSummary,
   NoteVersion,
   PublicNote,
   SearchResponse,
@@ -164,7 +165,7 @@ export function createDemoBackend(): DemoBackend {
       return compared * direction
     })
     const limit = Math.max(1, Math.min(500, Number(query.limit) || 100))
-    return c.json({ notes: notes.slice(0, limit).map(summarize), nextCursor: null, total: notes.length })
+    return c.json({ notes: withDemoSummaries(state, notes.slice(0, limit).map(summarize)), nextCursor: null, total: notes.length })
   })
   app.post('/api/notes', async (c) => {
     const body = await jsonBody(c.req.raw)
@@ -317,6 +318,7 @@ export function createDemoBackend(): DemoBackend {
       state.summaryDrafts.delete(id)
       if (state.summaries.get(id)?.origin === 'ai') state.summaries.delete(id)
     }
+    state.cursor++
     return c.json(demoSummaryResponse(state, id))
   })
 
@@ -340,6 +342,7 @@ export function createDemoBackend(): DemoBackend {
       pushDemoSummaryVersion(state, id)
       state.summaries.set(id, generated)
     }
+    state.cursor++
     return c.json(demoSummaryResponse(state, id))
   })
 
@@ -363,6 +366,7 @@ export function createDemoBackend(): DemoBackend {
     if (!version) return apiError(404, 'not_found', 'Version not found')
     pushDemoSummaryVersion(state, id)
     state.summaries.set(id, { ...version, updatedAt: Date.now() })
+    state.cursor++
     return c.json(demoSummaryResponse(state, id))
   })
 
@@ -373,6 +377,7 @@ export function createDemoBackend(): DemoBackend {
       pushDemoSummaryVersion(state, id)
       state.summaries.set(id, pending)
       state.summaryDrafts.delete(id)
+      state.cursor++
     }
     return c.json(demoSummaryResponse(state, id))
   })
@@ -397,6 +402,7 @@ export function createDemoBackend(): DemoBackend {
       updatedAt: Date.now(),
     })
     state.summaryDrafts.delete(id)
+    state.cursor++
     return c.json(demoSummaryResponse(state, id))
   })
 
@@ -409,7 +415,9 @@ export function createDemoBackend(): DemoBackend {
 
   app.get('/api/notes/:id', (c) => {
     const note = state.notes.get(c.req.param('id'))
-    return note ? c.json(note) : apiError(404, 'not_found', 'Note not found')
+    if (!note) return apiError(404, 'not_found', 'Note not found')
+    const [withSummary] = withDemoSummaries(state, [summarize(note)])
+    return c.json({ ...note, summary: withSummary?.summary ?? null, summarySettings: withSummary?.summarySettings })
   })
   app.patch('/api/notes/:id', async (c) => {
     const id = c.req.param('id')
@@ -675,7 +683,8 @@ export function createDemoBackend(): DemoBackend {
   app.post('/api/search/reindex', (c) => c.json({ ok: true as const, indexed: state.notes.size }))
   app.get('/api/sync', (c) => {
     const since = Number(c.req.query('since')) || 0
-    const changed = since < state.cursor
+    // 与真实后端一致：客户端 cursor 与服务端不一致时发全量，相等视为已是最新。
+    const changed = since !== state.cursor
     const response: SyncResponse = {
       cursor: state.cursor,
       full: changed,
@@ -684,7 +693,7 @@ export function createDemoBackend(): DemoBackend {
       facetsFull: changed,
       settingsChanged: false,
       profileChanged: false,
-      notes: changed ? [...state.notes.values()].map(summarize) : [],
+      notes: changed ? withDemoSummaries(state, [...state.notes.values()].map(summarize)) : [],
       folders: changed ? listFolders(state) : [],
       tags: changed ? listTags(state) : [],
       deletions: [],
@@ -1670,6 +1679,30 @@ function pushDemoSummaryVersion(state: DemoState, noteId: string) {
   if (!current) return
   const list = state.summaryVersions.get(noteId) ?? []
   state.summaryVersions.set(noteId, [current, ...list].slice(0, 20))
+}
+
+/** 演示环境同步：把摘要与单篇设置挂到笔记上，与真实后端一致。 */
+function withDemoSummaries(state: DemoState, notes: NoteSummary[]): NoteSummary[] {
+  return notes.map((note) => {
+    const sample = state.summaries.get(note.id)
+    return {
+      ...note,
+      summary: sample
+        ? {
+            text: sample.text,
+            origin: sample.origin,
+            status: 'current' as const,
+            updatedAt: sample.updatedAt,
+          }
+        : null,
+      summarySettings:
+        state.summarySettings.get(note.id) ?? {
+          summaryEnabled: null,
+          aiMode: 'inherit' as const,
+          autoGenerate: null,
+        },
+    }
+  })
 }
 
 /** 演示环境的摘要响应：策略固定为「摘要跟随内容、AI 可用、自动关」。 */

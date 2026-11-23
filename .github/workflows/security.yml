@@ -1,0 +1,152 @@
+name: "Security Scan"
+
+# 与 codeql.yml 一致：main 的 push + 所有 PR，避免推分支时重复整轮扫描。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # 密钥可能只存在于历史提交，所以要全量历史而非浅克隆。
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+
+  osv:
+    name: Dependencies (OSV)
+    # 复用官方 workflow：内部已处理检出、扫描与 SARIF 上传。
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36  # v2.7.0
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    with:
+      # 递归扫描会读到 package-lock.json，等价于依赖审计，无需另跑 npm audit。
+      scan-args: |-
+        --recursive
+        ./
+      upload-sarif: true
+      fail-on-vuln: true
+
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Semgrep CE
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "${PWD}:/src" \
+            -w /src \
+            semgrep/semgrep:latest \
+            semgrep scan --config p/default --sarif --output semgrep.sarif . || true
+
+          # 扫描异常时也要有合法 SARIF，否则上传步骤会报错而不是给出空结果。
+          if [ ! -f semgrep.sarif ]; then
+            cat > semgrep.sarif <<'EOF'
+          {
+            "version": "2.1.0",
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "runs": [{ "tool": { "driver": { "name": "Semgrep", "informationUri": "https://semgrep.dev", "rules": [] } }, "results": [] }]
+          }
+          EOF
+          fi
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@977e6ceaea7361825998245d787fa3b4d6b9e5df  # codeql-bundle-v2.27.0
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  actionlint:
+    name: Workflows syntax (actionlint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "${PWD}:/repo" \
+            -w /repo \
+            rhysd/actionlint:latest
+
+  zizmor:
+    name: Workflows security (zizmor)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd  # v0.8.1
+        with:
+          persona: auditor
+          min-severity: medium
+          min-confidence: medium
+
+  scorecard:
+    name: Supply chain (Scorecard)
+    runs-on: ubuntu-latest
+    # 评分面向仓库整体状态，只在主干变动时跑；PR 上重复跑没有新信息。
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run OpenSSF Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e  # v2.5.0
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          # 本仓是 fork，不往公开的 scorecard API 发布结果。
+          publish_results: false
+
+      - name: Upload Scorecard SARIF
+        uses: github/codeql-action/upload-sarif@977e6ceaea7361825998245d787fa3b4d6b9e5df  # codeql-bundle-v2.27.0
+        with:
+          sarif_file: scorecard.sarif
+          category: openssf-scorecard

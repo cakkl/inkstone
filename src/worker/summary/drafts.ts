@@ -1,6 +1,7 @@
 import type { AiSummaryOrigin } from '@shared/types'
 import { newId } from '../lib/id'
 import { loadSummary, type SummaryRow } from './service'
+import { notifySummaryChanged } from './sync-rows'
 
 export interface DraftRow {
   note_id: string
@@ -198,6 +199,7 @@ export async function acceptDraft(input: {
       refined ? (existing?.last_fresh_at ?? null) : now,
     )
     .run()
+  await notifySummaryChanged(input.db, input.userId, input.noteId)
 
   await deleteDraft(input.db, input.userId, input.noteId)
   return { ok: true }
@@ -252,5 +254,6 @@ export async function restoreVersion(input: {
       existing?.last_fresh_at ?? null,
     )
     .run()
+  await notifySummaryChanged(input.db, input.userId, input.noteId)
   return { ok: true }
 }
