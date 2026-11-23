@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+// TS 7（Go 版 tsgo）的包根不再暴露编译器 API，只有 `unstable/ast`。
+// 本脚本靠 AST 判定「哪些中文在字符串/JSX 文本里」，换成 unstable API 风险太大，
+// 因此固定用 typescript@5 的别名包，`tsc` 本身仍走 typescript 7。
+import ts from 'typescript-legacy';
 const root = path.resolve('src/client');
 const localeRoot = path.resolve('src/shared/locales');
 const failures = [];
