@@ -1,0 +1,38 @@
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Asia/Shanghai"
+    # 新版本发布后等 7 天再提 PR：避免上游连发补丁刷出一串 PR，
+    # 也让刚发布、尚未被广泛验证的版本先过一轮外部检验。
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      # minor 与 patch 合并成一个 PR，只有 major 单独走，便于逐个评估破坏性变更。
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:10"
+      timezone: "Asia/Shanghai"
+    # 本仓按 commit SHA 固定 action（tag 可被移动），代价是不会自动更新，
+    # 因此必须打开这一组，否则 SHA 会长期停在旧版本。
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"

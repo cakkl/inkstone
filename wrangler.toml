@@ -3,6 +3,15 @@ main = "src/worker/index.ts"
 compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
+# 关掉自带的 workers.dev 与预览地址，避免绕过自定义域名的访问面。
+# 前提：自定义域名已在 Dashboard 的 Custom Domains 里绑定并生效。
+# ⚠️ 顶层键必须写在任何表头之前，否则会被当成 [vars] 的成员。
+workers_dev = false
+preview_urls = false
+
+# 线上异常栈指回 src/ 的原始文件与行号（否则只能看到打包后的位置）。
+upload_source_maps = true
+
 [assets]
 directory = "./dist/client"
 binding = "ASSETS"
@@ -59,4 +68,18 @@ crons = ["0 * * * *", "15,45 * * * *"]
 APP_NAME = "Inkstone"
 
 [observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+# 不采样：日志几乎都落在错误路径（正常请求只有 1 条 invocation log），漏掉错日志代价更大。
+head_sampling_rate = 1
+
+# 一次 /api/sync 就有十几个 span，远多于日志事件 ⇒ 0.1 仍能覆盖每小时的 cron。
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.1
+
+[observability.issues]
 enabled = true
