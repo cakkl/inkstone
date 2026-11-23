@@ -1,6 +1,6 @@
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
-import { completeCodeFenceOnEnter, insertMathBlock, setHeading, toggleComment } from './commands'
+import { completeCodeFenceOnEnter, insertMathBlock, setHeading, toggleComment, updateTaskAtSourceLine } from './commands'
 import { renderMarkdown } from '../lib/markdown/renderer'
 
 function runFenceCompletion(doc: string, cursor = doc.length) {
@@ -64,5 +64,23 @@ describe('toolbar formatting commands', () => {
     expect(renderMarkdown(state.doc.toString()).html).toContain('Public')
     toggleComment({ state, dispatch: (transaction) => { state = transaction.state } })
     expect(state.doc.toString()).toBe(doc)
+  })
+})
+
+describe('task marker detection', () => {
+  // 旧实现用 `(?:[ \t]*>[ \t]?)*`，在 `\t>` 重复串上会指数回溯：40 个字符就已卡到秒级。
+  it('stays fast on an adversarial quote prefix', () => {
+    for (const line of ['\t>'.repeat(2000), '>\t'.repeat(2000), '>'.repeat(4000)]) {
+      const started = performance.now()
+      expect(updateTaskAtSourceLine(line, 0, true)).toBeNull()
+      expect(performance.now() - started).toBeLessThan(1000)
+    }
+  })
+
+  it('still toggles markers behind block quotes and ordered lists', () => {
+    expect(updateTaskAtSourceLine('> - [ ] quoted task', 0, true)).toBe('> - [x] quoted task')
+    expect(updateTaskAtSourceLine('\t1. [x] nested', 0, false)).toBe('\t1. [ ] nested')
+    expect(updateTaskAtSourceLine('> > - [ ] deep', 0, true)).toBe('> > - [x] deep')
+    expect(updateTaskAtSourceLine('plain text', 0, true)).toBeNull()
   })
 })

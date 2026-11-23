@@ -93,7 +93,6 @@ export async function persistAttachment(
 
   const filename = sanitizeAttachmentFilename(input.filename)
   const sha256 = await sha256Hex(input.bytes)
-  let storedObject = false
   const objectRow = {
     user_id: input.userId,
     id: input.id,
@@ -110,7 +109,6 @@ export async function persistAttachment(
     mime,
     sha256,
   })
-  storedObject = true
 
   try {
     await env.DB.prepare(
@@ -132,19 +130,18 @@ export async function persistAttachment(
       )
       .run()
   } catch (error) {
-    if (storedObject) {
-      try {
-        await deleteAttachmentObjects(env, storage, [objectKey])
-      } catch (cleanupError) {
-        await env.DB.prepare(
-          `INSERT OR IGNORE INTO attachment_cleanup (object_key, user_id, created_at)
-           VALUES (?1, ?2, ?3)`,
-        )
-          .bind(attachmentCleanupTarget(storage, objectKey), input.userId, Date.now())
-          .run()
-          .catch(() => {})
-        console.warn('[inkstone] Attachment cleanup after a write rollback will retry later:', cleanupError)
-      }
+    // 对象已写入成功，只需清掉 DB 失败后残留的对象。
+    try {
+      await deleteAttachmentObjects(env, storage, [objectKey])
+    } catch (cleanupError) {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO attachment_cleanup (object_key, user_id, created_at)
+         VALUES (?1, ?2, ?3)`,
+      )
+        .bind(attachmentCleanupTarget(storage, objectKey), input.userId, Date.now())
+        .run()
+        .catch(() => {})
+      console.warn('[inkstone] Attachment cleanup after a write rollback will retry later:', cleanupError)
     }
     throw error
   }

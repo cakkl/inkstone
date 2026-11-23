@@ -293,7 +293,7 @@ async function persistRunSafely(
   try {
     await persistRun(env, userId, run, note)
   } catch (error) {
-    console.error(`[inkstone] Backup completed, but writing the run record failed (${run.id}):`, error)
+    console.error('[inkstone] Backup completed, but writing the run record failed:', run.id, error)
   }
 }
 
@@ -307,7 +307,7 @@ async function recordOutcomeSafely(
   try {
     await updateTargetStates(env, userId, run.results, targets)
   } catch (error) {
-    console.error(`[inkstone] Backup completed, but writing target state failed (${run.id}):`, error)
+    console.error('[inkstone] Backup completed, but writing target state failed:', run.id, error)
   }
 }
 

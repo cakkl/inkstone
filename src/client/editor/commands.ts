@@ -631,7 +631,8 @@ export function updateTaskAtSourceLine(source: string, lineIndex: number, checke
 }
 
 function taskMarker(line: string): RegExpExecArray | null {
-    return /^((?:[ \t]*>[ \t]?)*[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[)([ xX])(\])/.exec(line);
+    // 引用前缀用字符类而不是嵌套量词：`(?:[ \t]*>[ \t]?)*` 在 `\t>\t>…` 上会指数回溯。
+    return /^([ \t>]*(?:[-*+]|\d+[.)])[ \t]+\[)([ xX])(\])/.exec(line);
 }
 
 function selectedLineBounds(state: EditorState, range: SelectionRange): {

@@ -883,6 +883,36 @@ function blockLine(state: {
     const from = state.bMarks[line]! + state.tShift[line]!;
     return state.src.slice(from, state.eMarks[line]!);
 }
+
+/** 行首连续冒号的个数；用于比较 `:::` 围栏的深度。 */
+function leadingColons(text: string): number {
+    let count = 0;
+    while (text.charCodeAt(count) === 58 /* : */)
+        count++;
+    return count;
+}
+
+/** `:::{tab-set}` 或 `::: details` / `::: tabs`——开启一层指令容器。 */
+function opensDirectiveContainer(text: string, minColons: number): boolean {
+    const colons = leadingColons(text);
+    if (colons < minColons)
+        return false;
+    const rest = text.slice(colons);
+    if (rest.startsWith('{tab-set}'))
+        return true;
+    const trimmed = rest.replace(/^[ \t]+/, '');
+    if (trimmed === rest)
+        return false;
+    return /^(?:details|tabs)(?![A-Za-z0-9_])/.test(trimmed);
+}
+
+/** 只有冒号与空白——关闭一层容器。 */
+function isContainerCloser(text: string, minColons: number): boolean {
+    const colons = leadingColons(text);
+    if (colons < minColons)
+        return false;
+    return text.slice(colons).trim() === '';
+}
 function findContainerEnd(state: {
     src: string;
     bMarks: number[];
@@ -907,9 +937,9 @@ function findContainerEnd(state: {
         }
         if (fence)
             continue;
-        if (new RegExp(`^:{${markerLength},}(?:\\s+(?:details|tabs)\\b|\\{tab-set\\})`).test(text))
+        if (opensDirectiveContainer(text, markerLength))
             depth++;
-        else if (new RegExp(`^:{${markerLength},}\\s*$`).test(text) && --depth === 0)
+        else if (isContainerCloser(text, markerLength) && --depth === 0)
             return line;
     }
     return -1;
@@ -1021,7 +1051,7 @@ function findColonFenceEnd(state: {
                 fence = null;
             continue;
         }
-        if (!fence && new RegExp(`^:{${markerLength},}\\s*$`).test(text))
+        if (!fence && isContainerCloser(text, markerLength))
             return line;
     }
     return -1;

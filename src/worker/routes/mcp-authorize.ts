@@ -241,7 +241,9 @@ function permission(scope: string, title: string, detail: string, checked: boole
 
 function loginPage(clientName: string, locale: AppLocale, currentUrl: string): string {
   const copy = authorizationCopy(locale)
-  return page(`
+  // 正文与内联脚本分开构造：正文里的插值全是我们自己的文案，与 <script> 同处一个
+  // 模板字面量会被误判成「把未知值写进脚本」。
+  const body = `
     <div class="panel-body">
       <section class="request-card">
         <span class="brand-mark">${logoMark()}</span>
@@ -260,7 +262,14 @@ function loginPage(clientName: string, locale: AppLocale, currentUrl: string): s
         <button class="primary wide" type="submit">${copy.signInContinue}</button>
       </form>
       <p class="foot">${copy.needAccount}</p>
-    </div>
+    </div>`
+  return page(body + loginScript(copy.signInFailed), locale, currentUrl)
+}
+
+/** 只把已序列化的文案拼进内联脚本，`<` 转义后可防止提前闭合 </script>。 */
+function loginScript(signInFailed: string): string {
+  const fallback = scriptJson(signInFailed)
+  return `
     <script>
       document.getElementById('login').addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -276,12 +285,12 @@ function loginPage(clientName: string, locale: AppLocale, currentUrl: string): s
           });
           if (!response.ok) {
             const body = await response.json().catch(() => null);
-            throw new Error(body?.error?.message || ${JSON.stringify(copy.signInFailed)});
+            throw new Error(body?.error?.message || ${fallback});
           }
           location.reload();
-        } catch (reason) { error.textContent = reason.message || ${JSON.stringify(copy.signInFailed)}; button.disabled = false; }
+        } catch (reason) { error.textContent = reason.message || ${fallback}; button.disabled = false; }
       });
-    </script>`, locale, currentUrl)
+    </script>`
 }
 
 function errorPage(message: string, locale: AppLocale, currentUrl: string): string {
@@ -447,4 +456,9 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[character]!)
+}
+
+/** 序列化成可安全放进内联 <script> 的字面量：转义 `<` 以免提前闭合脚本标签。 */
+function scriptJson(value: string): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c')
 }

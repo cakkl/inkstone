@@ -64,9 +64,10 @@ export interface DemoSampleSummary {
 const seedId = (value: number) => `01j${String(value).padStart(23, '0')}`
 
 export function newDemoId(): string {
+  // 字母表 32 个字符整除 256，取低 5 位不会产生取模偏差。
   const alphabet = '0123456789abcdefghjkmnpqrstvwxyz'
   const bytes = crypto.getRandomValues(new Uint8Array(26))
-  return [...bytes].map((value) => alphabet[value % alphabet.length]).join('')
+  return [...bytes].map((value) => alphabet[value & 31]).join('')
 }
 
 export function createDemoState(): DemoState {

@@ -250,7 +250,8 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       await task
     } finally {
-      if (logoutPromise === task) logoutPromise = null
+      // 只有当前调用会设置该变量（并发调用在上面的提前返回里），所以无需比对身份。
+      logoutPromise = null
     }
   },
 

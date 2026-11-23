@@ -74,7 +74,7 @@ class RenderedBlock extends WidgetType {
                 const n = Number(checkbox.dataset.taskLine) + 1;
                 if (n > 0 && n <= view.state.doc.lines) {
                     const line = view.state.doc.line(n);
-                    const match = /^(?:\s*>\s*)*\s*(?:[-+*]|\d+[.)])\s+\[([ xX])\]/.exec(line.text);
+                    const match = /^[ \t>]*(?:[-+*]|\d+[.)])[ \t]+\[([ xX])\]/.exec(line.text);
                     if (match) {
                         const pos = line.from + match[0].length - 2;
                         view.dispatch({ changes: { from: pos, to: pos + 1, insert: match[1] === ' ' ? 'x' : ' ' }, userEvent: 'input' });
