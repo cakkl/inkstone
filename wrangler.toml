@@ -1,6 +1,7 @@
 name = "inkstone"
 main = "src/worker/index.ts"
-compatibility_date = "2026-05-01"
+# 运行时行为版本：改它等于换一套默认行为，改完需照着清单冒烟（登录 / 同步 / 附件 / 分享 / AI / 备份）。
+compatibility_date = "2026-11-19"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
 # 关掉自带的 workers.dev 与预览地址，避免绕过自定义域名的访问面。

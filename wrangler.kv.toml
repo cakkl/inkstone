@@ -1,6 +1,7 @@
 name = "inkstone"
 main = "src/worker/index.ts"
-compatibility_date = "2026-05-01"
+# 与 wrangler.toml 同步：同一个 Worker 的两份部署配置，行为版本不能分叉。
+compatibility_date = "2026-11-19"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
 [assets]
