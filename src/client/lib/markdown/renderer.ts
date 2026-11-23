@@ -883,6 +883,36 @@ function blockLine(state: {
     const from = state.bMarks[line]! + state.tShift[line]!;
     return state.src.slice(from, state.eMarks[line]!);
 }
+
+/** 行首连续冒号的个数；用于比较 `:::` 围栏的深度。 */
+function leadingColons(text: string): number {
+    let count = 0;
+    while (text.charCodeAt(count) === 58 /* : */)
+        count++;
+    return count;
+}
+
+/** `:::{tab-set}` 或 `::: details` / `::: tabs`——开启一层指令容器。 */
+function opensDirectiveContainer(text: string, minColons: number): boolean {
+    const colons = leadingColons(text);
+    if (colons < minColons)
+        return false;
+    const rest = text.slice(colons);
+    if (rest.startsWith('{tab-set}'))
+        return true;
+    const trimmed = rest.replace(/^[ \t]+/, '');
+    if (trimmed === rest)
+        return false;
+    return /^(?:details|tabs)(?![A-Za-z0-9_])/.test(trimmed);
+}
+
+/** 只有冒号与空白——关闭一层容器。 */
+function isContainerCloser(text: string, minColons: number): boolean {
+    const colons = leadingColons(text);
+    if (colons < minColons)
+        return false;
+    return text.slice(colons).trim() === '';
+}
 function findContainerEnd(state: {
     src: string;
     bMarks: number[];
@@ -890,11 +920,6 @@ function findContainerEnd(state: {
     eMarks: number[];
 }, startLine: number, endLine: number, markerLength: number): number {
     let depth = 1;
-    // markerLength 是数字（来自匹配到的冒号个数），拼进正则不可能引入字符注入。
-    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
-    const directiveOpen = new RegExp(`^:{${markerLength},}(?:\\s+(?:details|tabs)\\b|\\{tab-set\\})`);
-    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
-    const containerClose = new RegExp(`^:{${markerLength},}\\s*$`);
     let fence: {
         char: string;
         length: number;
@@ -912,9 +937,9 @@ function findContainerEnd(state: {
         }
         if (fence)
             continue;
-        if (directiveOpen.test(text))
+        if (opensDirectiveContainer(text, markerLength))
             depth++;
-        else if (containerClose.test(text) && --depth === 0)
+        else if (isContainerCloser(text, markerLength) && --depth === 0)
             return line;
     }
     return -1;
@@ -1015,9 +1040,6 @@ function findColonFenceEnd(state: {
     eMarks: number[];
 }, start: number, end: number, markerLength: number): number {
     let fence: { char: string; length: number } | null = null;
-    // markerLength 是数字，无法构造出有特殊含义的字符。
-    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
-    const closer = new RegExp(`^:{${markerLength},}\\s*$`);
     for (let line = start; line < end; line++) {
         const text = blockLine(state, line);
         const codeFence = /^(`{3,}|~{3,})/.exec(text);
@@ -1029,7 +1051,7 @@ function findColonFenceEnd(state: {
                 fence = null;
             continue;
         }
-        if (!fence && closer.test(text))
+        if (!fence && isContainerCloser(text, markerLength))
             return line;
     }
     return -1;

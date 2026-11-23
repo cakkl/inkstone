@@ -26,4 +26,3 @@ Please avoid accessing data that is not yours, degrading a production service, o
 ## Security boundaries
 
 Inkstone is self-hosted software, not a hosted service. Deployment owners are responsible for their Cloudflare account, custom domains, access policies, backup destinations, and timely updates. Inkstone does not provide a password-reset bypass; losing the owner password requires restoring from a trusted backup or reinitializing the instance.
-

@@ -226,9 +226,7 @@ export function extractHeadingSection(markdown: string, heading: string): string
 export function extractBlock(markdown: string, blockId: string): string | null {
   const safeId = blockId.replace(/[^A-Za-z0-9_-]/g, '')
   if (!safeId) return null
-  // safeId 已白名单过滤且经 escapeRegExp 转义，不存在正则注入。
-  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
-  const marker = new RegExp(`(?:^|\\s)\\^${escapeRegExp(safeId)}[ \\t]*$`)
+  const marker = `^${safeId}`
   const lines = markdown.split(/\r?\n/)
   let fence: { char: string; length: number } | null = null
   for (let index = 0; index < lines.length; index++) {
@@ -239,15 +237,29 @@ export function extractBlock(markdown: string, blockId: string): string | null {
       else if (fenceMarker[0] === fence.char && fenceMarker.length >= fence.length) fence = null
       continue
     }
-    if (fence || !marker.test(line)) continue
+    if (fence || !endsWithBlockMarker(line, marker)) continue
 
-    const cleaned = line.replace(marker, '').trimEnd()
+    const cleaned = stripBlockMarker(line, marker).trimEnd()
     if (/^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/.test(line)) return cleaned.trim()
     let start = index
     while (start > 0 && lines[start - 1]!.trim() && !/^ {0,3}#{1,6}\s/.test(lines[start - 1]!)) start--
     return [...lines.slice(start, index), cleaned].join('\n').trim()
   }
   return null
+}
+
+/** 行尾是否是 `^id`（前面是行首或空白，后面只允许空格/制表符）。 */
+function endsWithBlockMarker(line: string, marker: string): boolean {
+  const trimmed = line.replace(/[ \t]+$/, '')
+  if (!trimmed.endsWith(marker)) return false
+  const head = trimmed.slice(0, trimmed.length - marker.length)
+  return head === '' || /\s$/.test(head)
+}
+
+/** 去掉行尾那个 `^id` 标记，保留它之前的正文。 */
+function stripBlockMarker(line: string, marker: string): string {
+  const trimmed = line.replace(/[ \t]+$/, '')
+  return trimmed.slice(0, trimmed.length - marker.length)
 }
 
 function showError(embed: HTMLElement, message: string): void {
@@ -271,8 +283,4 @@ function stripInlineMarkdown(value: string): string {
 
 function normalize(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/\s+/g, ' ')
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
