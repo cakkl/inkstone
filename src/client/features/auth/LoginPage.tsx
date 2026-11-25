@@ -130,23 +130,29 @@ export function LoginPage() {
                 <KeyRound size={14} className="shrink-0 text-[var(--accent)]" />
                 <span className="min-w-0 truncate">@{username.trim()}</span>
               </div>
-              <Input
-                aria-label={recoveryMode ? t('auth.recovery_code') : t('auth.authenticator_code')}
-                value={verificationCode}
-                maxLength={recoveryMode ? 24 : 8}
-                onChange={(event) => setVerificationCode(
-                  recoveryMode
-                    ? event.target.value.toUpperCase()
-                    : event.target.value.replace(/\D/g, '').slice(0, 6),
-                )}
-                disabled={busy}
-                placeholder={recoveryMode ? 'XXXX-XXXX-XXXX-XXXX' : '000000'}
-                autoComplete={recoveryMode ? 'off' : 'one-time-code'}
-                autoCapitalize={recoveryMode ? 'characters' : 'none'}
-                inputMode={recoveryMode ? 'text' : 'numeric'}
-                spellCheck={false}
-                autoFocus
-              />
+              {/* Keep the <label> wrapper: password managers read the field name from it,
+                  and Bitwarden offers no fill candidate with only aria-label. */}
+              <label className="block">
+                <span className="mb-1 block text-[11.5px] text-[var(--text-tertiary)]">
+                  {recoveryMode ? t('auth.recovery_code') : t('auth.authenticator_code')}
+                </span>
+                <Input
+                  value={verificationCode}
+                  maxLength={recoveryMode ? 24 : 8}
+                  onChange={(event) => setVerificationCode(
+                    recoveryMode
+                      ? event.target.value.toUpperCase()
+                      : event.target.value.replace(/\D/g, '').slice(0, 6),
+                  )}
+                  disabled={busy}
+                  placeholder={recoveryMode ? 'XXXX-XXXX-XXXX-XXXX' : '000000'}
+                  autoComplete={recoveryMode ? 'off' : 'one-time-code'}
+                  autoCapitalize={recoveryMode ? 'characters' : 'none'}
+                  inputMode={recoveryMode ? 'text' : 'numeric'}
+                  spellCheck={false}
+                  autoFocus
+                />
+              </label>
             </>
           ) : (
             <>
