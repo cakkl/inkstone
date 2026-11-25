@@ -8,7 +8,8 @@ export interface PurgeMarker {
   /** 只删这个时刻之前创建/更新的行，避免删掉重新开启后新生成的内容。 */
   startedAt: number
 }
-
+/** D1 单个查询最多 99 个绑定参数（含 userId），按 80 分块删除。 */
+const DELETE_CHUNK = 80
 export async function markAiSummaryPurge(db: D1Database, userId: string, startedAt: number): Promise<void> {
   await setMeta(db, `${PURGE_KEY_PREFIX}${userId}`, JSON.stringify({ startedAt } satisfies PurgeMarker))
 }
@@ -68,10 +69,16 @@ export async function drainAiSummaryPurge(
     .all<{ note_id: string }>()
   if (results.length) {
     const ids = results.map((row) => row.note_id)
-    const marks = ids.map(() => '?').join(', ')
+    // 200 条一次性拼进 IN 会超过 D1 的参数上限，按块删除。
+    for (let offset = 0; offset < ids.length; offset += DELETE_CHUNK) {
+      const chunk = ids.slice(offset, offset + DELETE_CHUNK)
+      const marks = chunk.map(() => '?').join(', ')
+      await db
+        .prepare(`DELETE FROM note_summaries WHERE user_id = ?1 AND note_id IN (${marks})`)
+        .bind(userId, ...chunk)
+        .run()
+    }
     await db.batch([
-      db.prepare(`DELETE FROM note_summaries WHERE user_id = ?1 AND note_id IN (${marks})`)
-        .bind(userId, ...ids),
       db.prepare(`DELETE FROM note_summary_drafts WHERE user_id = ?1 AND created_at <= ?2`)
         .bind(userId, startedAt),
       db.prepare(`DELETE FROM note_summary_queue WHERE user_id = ?1`).bind(userId),

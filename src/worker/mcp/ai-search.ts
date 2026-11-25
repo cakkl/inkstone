@@ -20,6 +20,8 @@ const MAX_SEMANTIC_VECTORS = 8_000
 const SEMANTIC_TOP_K = 40
 const DRAIN_USERS_PER_RUN = 10
 const DRAIN_PER_USER = 25
+/** 单轮真正能处理的上限：用户数限制先于条数限制生效，写更大的值没有意义。 */
+export const AI_INDEX_DRAIN_BUDGET = DRAIN_USERS_PER_RUN * DRAIN_PER_USER
 const AI_DRAIN_CURSOR_META_KEY = 'ai-index-drain-user-v1'
 const ENQUEUE_CHUNK = 200
 export const RRF_K = 60

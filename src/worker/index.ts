@@ -3,7 +3,8 @@ import { runScheduledBackups } from './backup/scheduler'
 import type { Env } from './env'
 import { initializeDatabase } from './db/schema'
 import { drainAllFtsQueues } from './db/fts'
-import { drainAiIndexQueue } from './mcp/ai-search'
+import { runScheduledTasks } from './lib/scheduled-tasks'
+import { AI_INDEX_DRAIN_BUDGET, drainAiIndexQueue } from './mcp/ai-search'
 import { drainSummaryQueue } from './summary/queue'
 import { drainPendingPurges } from './summary/drain-purge'
 import { createOAuthProvider, purgeExpiredOAuthData } from './mcp/oauth'
@@ -45,20 +46,32 @@ export default {
 
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
-      await initializeDatabase(env)
-      await Promise.all([
-        runScheduledBackups(env),
-        runAttachmentCleanup(env),
-        purgeExpiredMcpOperations(env.DB),
-        purgeExpiredOperationalData(env.DB),
-        purgeRevokedMcpApiKeys(env.DB),
-        purgeExpiredOAuthData(env),
-        drainAiIndexQueue(env, 300),
+      try {
+        await initializeDatabase(env)
+      } catch (error) {
+        console.error('[inkstone] Scheduled run skipped: database initialization failed', error)
+        return
+      }
+
+      // 轻维护：每个任务只有一两次查询，并发也不会把 D1 压垮。
+      await runScheduledTasks('maintenance', [
+        ['attachments', () => runAttachmentCleanup(env)],
+        ['mcp-operations', () => purgeExpiredMcpOperations(env.DB)],
+        ['operational-data', () => purgeExpiredOperationalData(env.DB)],
+        ['mcp-api-keys', () => purgeRevokedMcpApiKeys(env.DB)],
+        ['oauth', () => purgeExpiredOAuthData(env)],
+        ['summary-purge', () => drainPendingPurges(env)],
+        ['fts-index', () => drainAllFtsQueues(env.DB)],
+      ], 3)
+
+      // 重活：会连续发大量读写（备份快照、逐篇 embedding、逐篇摘要），
+      // 与上面的轻维护分开跑，避免所有任务的第一批查询同时压到 D1。
+      await runScheduledTasks('batch', [
+        ['backup', () => runScheduledBackups(env)],
+        ['ai-index', () => drainAiIndexQueue(env, AI_INDEX_DRAIN_BUDGET)],
         // 每小时最多 25 篇；额度耗尽会在内部 break，不会烧超。
-        drainSummaryQueue(env, 25),
-        drainPendingPurges(env),
-        drainAllFtsQueues(env.DB),
-      ])
+        ['summary-queue', () => drainSummaryQueue(env, 25)],
+      ], 2)
     })())
   },
 } satisfies ExportedHandler<Env>

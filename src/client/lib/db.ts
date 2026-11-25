@@ -42,7 +42,8 @@ interface ShellData {
 }
 
 /** 缓存结构版本：2 起包含 links 索引，旧版本缓存需要一次全量同步补齐。 */
-export const SHELL_VERSION = 2
+/** 本地缓存结构版本：升号会让所有客户端作废缓存、重拉全量。3 = NoteSummary 新增 summary/summarySettings。 */
+export const SHELL_VERSION = 3
 
 /** 跨标签页重放锁的最长等待时间；超时后调用方退回到「只刷新待办计数」。 */
 const OUTBOX_LOCK_WAIT_MS = 30_000
