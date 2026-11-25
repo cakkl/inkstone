@@ -20,7 +20,8 @@ export async function runScheduledTasks(
     try {
       await run()
     } catch (error) {
-      console.error(`[inkstone] Scheduled task failed (${group}/${name}):`, error)
+      // 任务名作为独立参数传入，不拼进格式串。
+      console.error('[inkstone] Scheduled task failed:', group, name, error)
     }
   })
 }

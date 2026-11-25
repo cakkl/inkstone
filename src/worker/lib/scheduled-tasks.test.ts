@@ -16,9 +16,11 @@ describe('runScheduledTasks', () => {
     ], 2)
 
     expect(done.sort()).toEqual(['ok-1', 'ok-2'])
-    // 失败要能指出是哪个任务。
+    // 失败要能指出是哪个任务：格式串在前，分组名与任务名作为独立参数。
     expect(errors).toHaveBeenCalledTimes(1)
-    expect(String(errors.mock.calls[0]![0])).toContain('maintenance/broken')
+    const [, group, name] = errors.mock.calls[0]!
+    expect(group).toBe('maintenance')
+    expect(name).toBe('broken')
     errors.mockRestore()
   })
 
