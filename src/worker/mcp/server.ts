@@ -11,6 +11,7 @@ import {
   listMcpTags,
   readMcpNote,
   searchMcpNotes,
+  type McpSearchResponse,
 } from './retrieval'
 import { getMcpPreferences, MCP_SCOPES } from './settings'
 import {
@@ -73,6 +74,45 @@ Work with content: Markdown is the source of truth. Use get_note_context for lin
 Respect access: Reads require notes:read; most writes require notes:write; moving a note to trash requires separately granted notes:trash and is reversible. A /s/<slug> URL is a public share, possibly password protected or expiring. Use get_note_share to inspect a share, and create or change public sharing only when the user explicitly asks. Read attachments in chunks; uploads have storage, quota, and rate limits. Backup tools can run existing targets but cannot reveal or change credentials. Permanent purge and account or authentication management are not exposed.`
 
 const generalOutputSchema = z.object({ data: z.record(z.string(), z.unknown()) })
+
+/**
+ * 声明了 outputSchema 的工具，返回必须完全符合它：Zod 生成的 JSON Schema 带
+ * `additionalProperties: false`，严格校验的客户端（如 Hermes）会因多余字段直接报错。
+ */
+export const searchOutputSchema = z.object({
+  results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().url() })),
+  mode: z.enum(['lexical', 'semantic', 'hybrid']).describe('Which retrieval path produced these results'),
+})
+
+export const fetchOutputSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  text: z.string(),
+  url: z.string().url(),
+  metadata: z.record(z.string(), z.unknown()),
+})
+
+/** search 失败时的空结果：字段齐全才能通过 outputSchema 校验，具体错误看 content。 */
+export const EMPTY_SEARCH_RESULT: z.infer<typeof searchOutputSchema> = { results: [], mode: 'lexical' }
+
+/** 返回类型由 schema 推导：字段增删会变成编译错误，防止返回值与 schema 再次脱节。 */
+export function toSearchResult(found: McpSearchResponse): z.infer<typeof searchOutputSchema> {
+  return {
+    results: found.results.map(({ id, title, url }) => ({ id, title, url })),
+    mode: found.mode,
+  }
+}
+
+/** fetch 失败时的占位结果：字段齐全才能通过 outputSchema 校验，具体错误看 content。 */
+export function emptyFetchResult(origin: string, id: string): z.infer<typeof fetchOutputSchema> {
+  return {
+    id,
+    title: '',
+    text: '',
+    url: `${origin.replace(/\/$/, '')}/n/${encodeURIComponent(id)}`,
+    metadata: {},
+  }
+}
 const operationId = z.string().min(8).max(128).describe('Stable UUID or unique request key; reuse only for an exact retry')
 const noteId = z.string().refine(isValidId, 'Invalid Inkstone note id')
 const expectedRev = z.number().int().positive().describe('Current note rev returned by read_note or fetch')
@@ -100,9 +140,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
         mode: z.enum(['auto', 'lexical', 'semantic', 'hybrid']).default('auto')
           .describe('auto: hybrid when AI semantic search is enabled, else keyword search; lexical: keyword only; semantic: meaning only; hybrid: both merged'),
       }),
-      outputSchema: z.object({
-        results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().url() })),
-      }),
+      outputSchema: searchOutputSchema,
       annotations: readOnlyAnnotations(),
     },
     async ({ query, mode }, ctx) => safeTool(async () => {
@@ -114,12 +152,8 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
         options.ftsEnabled,
         { query, limit: 8, mode },
       )
-      const value = {
-        results: found.results.map(({ id, title, url }) => ({ id, title, url })),
-        mode: found.mode,
-      }
-      return structured(value)
-    }),
+      return structured(toSearchResult(found))
+    }, () => EMPTY_SEARCH_RESULT),
   )
 
   server.registerTool(
@@ -128,19 +162,13 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
       title: 'Fetch Inkstone note',
       description: 'Fetch one private note by id returned from search. Long notes are bounded and include a cursor for read_note.',
       inputSchema: z.object({ id: z.string().min(1).max(256) }),
-      outputSchema: z.object({
-        id: z.string(),
-        title: z.string(),
-        text: z.string(),
-        url: z.string().url(),
-        metadata: z.record(z.string(), z.unknown()),
-      }),
+      outputSchema: fetchOutputSchema,
       annotations: readOnlyAnnotations(),
     },
     async ({ id }, ctx) => safeTool(async () => {
       requireScope(ctx, options.auth, MCP_SCOPES.read)
       return structured(await fetchMcpNote(options.env.DB, options.auth.userId, options.origin, id))
-    }),
+    }, () => emptyFetchResult(options.origin, id)),
   )
 
   server.registerTool(
@@ -962,7 +990,7 @@ async function customTool(
     requireScope(ctx, options.auth, MCP_SCOPES.read)
     const value = await callback()
     return structuredData(value)
-  })
+  }, (body) => ({ data: body }))
 }
 
 async function writeTool(
@@ -981,7 +1009,7 @@ async function writeTool(
       throw ApiError.forbidden('MCP trash access is disabled in Inkstone settings')
     }
     return structuredData(await callback())
-  })
+  }, (body) => ({ data: body }))
 }
 
 function requireScope(ctx: ServerContext, fallback: McpAuthProps, required: string): void {
@@ -989,7 +1017,11 @@ function requireScope(ctx: ServerContext, fallback: McpAuthProps, required: stri
   if (!scopes.includes(required)) throw ApiError.forbidden(`OAuth scope required: ${required}`)
 }
 
-async function safeTool(callback: () => Promise<ReturnType<typeof structured> | ReturnType<typeof structuredData>>) {
+/** 失败时同样给出符合 outputSchema 的 structuredContent，否则严格客户端会判响应不合法。 */
+async function safeTool<TStructured>(
+  callback: () => Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: TStructured }>,
+  onError: (body: Record<string, unknown>) => TStructured,
+) {
   try {
     return await callback()
   } catch (error) {
@@ -997,6 +1029,7 @@ async function safeTool(callback: () => Promise<ReturnType<typeof structured> | 
     return {
       isError: true as const,
       content: [{ type: 'text' as const, text: JSON.stringify(body) }],
+      structuredContent: onError(body),
     }
   }
 }
