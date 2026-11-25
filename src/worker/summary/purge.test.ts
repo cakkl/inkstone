@@ -62,4 +62,19 @@ describe('purge scope', () => {
     const removed = await drainAiSummaryPurge(db, 'u1', 1_000)
     expect(removed).toBe(0)
   })
+
+  it('splits the delete so no query exceeds the D1 parameter limit', async () => {
+    // D1 单个查询最多 99 个绑定参数（含 userId）；200 条一次拼进 IN 会超限。
+    const ids = Array.from({ length: 200 }, (_, index) => `n${index}`)
+    const { db, statements } = fakeDb(ids)
+    const removed = await drainAiSummaryPurge(db, 'u1', 1_000)
+    expect(removed).toBe(200)
+
+    const deletes = statements.filter((entry) => entry.sql.includes('DELETE FROM note_summaries'))
+    expect(deletes.length).toBe(3)
+    for (const entry of deletes) {
+      expect(entry.args.length).toBeLessThanOrEqual(99)
+    }
+    expect(deletes.map((entry) => entry.args.length)).toEqual([81, 81, 41])
+  })
 })

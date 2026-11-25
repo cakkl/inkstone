@@ -373,8 +373,9 @@ export function useSyncEngine(): void {
   useEffect(() => {
     let disposed = false
     void bootstrap()
-      .catch(() => {
-
+      .catch((error) => {
+        // 同步失败会退回本地缓存，从外观上看像数据丢失，不能静默吞掉。
+        console.error('[inkstone] Initial sync failed; showing cached data:', error)
       })
       .then(() => {
         if (disposed) return

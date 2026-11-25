@@ -6,6 +6,24 @@ export interface NoteSummaryBundle {
   settings: NoteSummarySettings
 }
 
+/** D1 单个查询最多 99 个绑定参数（含 userId），按 80 分块留余量。 */
+const SUMMARY_QUERY_CHUNK = 80
+
+interface SummaryRow {
+  note_id: string
+  summary_text: string
+  summary_origin: string
+  summary_status: string
+  updated_at: number
+}
+
+interface SettingRow {
+  note_id: string
+  summary_enabled: number | null
+  auto_mode: string
+  auto_generate: number | null
+}
+
 /**
  * 批量取摘要与单篇设置，供同步与列表接口把摘要挂到笔记上。
  *
@@ -23,38 +41,18 @@ export async function loadNoteSummaryBundles(
     out.set(id, { summary: null, settings: { ...DEFAULT_NOTE_SUMMARY_SETTINGS } })
   }
 
-  const marks = noteIds.map((_, index) => `?${index + 2}`).join(', ')
-  const [summaries, settings] = await Promise.all([
-    db
-      .prepare(
-        `SELECT note_id, summary_text, summary_origin, summary_status, updated_at
-           FROM note_summaries
-          WHERE user_id = ?1 AND note_id IN (${marks})`,
-      )
-      .bind(userId, ...noteIds)
-      .all<{
-        note_id: string
-        summary_text: string
-        summary_origin: string
-        summary_status: string
-        updated_at: number
-      }>(),
-    db
-      .prepare(
-        `SELECT note_id, summary_enabled, auto_mode, auto_generate
-           FROM note_summary_settings
-          WHERE user_id = ?1 AND note_id IN (${marks})`,
-      )
-      .bind(userId, ...noteIds)
-      .all<{
-        note_id: string
-        summary_enabled: number | null
-        auto_mode: string
-        auto_generate: number | null
-      }>(),
+  // 全量同步一次最多 500 篇，超出一个查询的参数上限，因此分块。
+  const chunks: string[][] = []
+  for (let index = 0; index < noteIds.length; index += SUMMARY_QUERY_CHUNK) {
+    chunks.push(noteIds.slice(index, index + SUMMARY_QUERY_CHUNK))
+  }
+
+  const [summaryPages, settingPages] = await Promise.all([
+    Promise.all(chunks.map((chunk) => fetchSummaries(db, userId, chunk))),
+    Promise.all(chunks.map((chunk) => fetchSettings(db, userId, chunk))),
   ])
 
-  for (const row of summaries.results) {
+  for (const row of summaryPages.flat()) {
     const bundle = out.get(row.note_id)
     if (!bundle) continue
     bundle.summary = {
@@ -66,7 +64,7 @@ export async function loadNoteSummaryBundles(
   }
 
   const flag = (value: number | null) => (value === 1 ? true : value === 0 ? false : null)
-  for (const row of settings.results) {
+  for (const row of settingPages.flat()) {
     const bundle = out.get(row.note_id)
     if (!bundle) continue
     bundle.settings = {
@@ -78,6 +76,32 @@ export async function loadNoteSummaryBundles(
   }
 
   return out
+}
+
+async function fetchSummaries(db: D1Database, userId: string, noteIds: string[]): Promise<SummaryRow[]> {
+  const marks = noteIds.map((_, index) => `?${index + 2}`).join(', ')
+  const { results } = await db
+    .prepare(
+      `SELECT note_id, summary_text, summary_origin, summary_status, updated_at
+         FROM note_summaries
+        WHERE user_id = ?1 AND note_id IN (${marks})`,
+    )
+    .bind(userId, ...noteIds)
+    .all<SummaryRow>()
+  return results
+}
+
+async function fetchSettings(db: D1Database, userId: string, noteIds: string[]): Promise<SettingRow[]> {
+  const marks = noteIds.map((_, index) => `?${index + 2}`).join(', ')
+  const { results } = await db
+    .prepare(
+      `SELECT note_id, summary_enabled, auto_mode, auto_generate
+         FROM note_summary_settings
+        WHERE user_id = ?1 AND note_id IN (${marks})`,
+    )
+    .bind(userId, ...noteIds)
+    .all<SettingRow>()
+  return results
 }
 
 /** 把摘要挂到笔记摘要对象上；没有摘要时把 `summary` 置为 `null`，便于客户端区分「没摘要」与「没同步」。 */
