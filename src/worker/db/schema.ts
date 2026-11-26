@@ -1,5 +1,6 @@
 /** Defines the idempotent final D1 schema initialized by every Worker isolate. */
 import type { DatabaseState, Env } from '../env'
+import { isTransientStorageError } from '../lib/errors'
 import { getMeta, setMeta } from './metadata'
 
 const BACKUP_ARCHIVES_TABLE = `CREATE TABLE IF NOT EXISTS backup_archives (
@@ -817,18 +818,24 @@ const REQUIRED_INDEXES = [
 ] as const
 
 
-const initializationCache = new WeakMap<D1Database, Promise<DatabaseState>>()
+// 只缓存已完成的状态，不缓存 promise：workerd 规定 promise 只能在其创建请求内 settle，
+// 复用别的请求创建的未完成 promise 会让后续请求永远挂住。
+const initializedState = new WeakMap<D1Database, DatabaseState>()
 
-export function initializeDatabase(env: Env): Promise<DatabaseState> {
-  const existing = initializationCache.get(env.DB)
-  if (existing) return existing
+export async function initializeDatabase(env: Env): Promise<DatabaseState> {
+  const ready = initializedState.get(env.DB)
+  if (ready) return ready
 
-  const pending = createSchema(env.DB).catch((error) => {
-    initializationCache.delete(env.DB)
-    throw error
-  })
-  initializationCache.set(env.DB, pending)
-  return pending
+  // 失败不写缓存（下一个请求会重跑幂等迁移）；瞬时故障在本次请求内重试一次。
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const state = await createSchema(env.DB)
+      initializedState.set(env.DB, state)
+      return state
+    } catch (error) {
+      if (attempt >= 2 || !isTransientStorageError(error)) throw error
+    }
+  }
 }
 
 async function createSchema(db: D1Database): Promise<DatabaseState> {

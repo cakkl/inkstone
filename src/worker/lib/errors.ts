@@ -32,11 +32,28 @@ export class ApiError extends Error {
   }
 }
 
+/** 请求生命周期类故障（跨请求 promise、请求被取消）：瞬时、可重试，不应按 500 上报。 */
+const TRANSIENT_STORAGE_PATTERN = /created by a request that has since ended|runtime canceled this request/i
+
+export function isTransientStorageError(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string' ? error : ''
+  return TRANSIENT_STORAGE_PATTERN.test(message)
+}
+
 export function errorResponse(c: Context, err: unknown): Response {
   if (err instanceof ApiError) {
     return c.json(
       { error: { code: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) } },
       err.status,
+    )
+  }
+  if (isTransientStorageError(err)) {
+    console.error('[inkstone] Transient storage failure:', describeUnknownError(err))
+    return c.json(
+      { error: { code: 'storage_unavailable', message: 'Storage is temporarily unavailable' } },
+      503,
     )
   }
   console.error('[inkstone] Unhandled error:', err)
