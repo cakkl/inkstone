@@ -70,4 +70,35 @@ describe('数据库初始化', () => {
       .all() as { version: number }[]).map((row) => row.version)
     expect(applied.sort()).toEqual([19, 20, 21])
   })
+
+  // 缓存未完成的 promise 会让后续请求 await 到一个永远不 settle 的对象。
+  it('同一数据库的两次调用不共用 promise', () => {
+    const env = makeEnv(new DatabaseSync(':memory:'))
+    expect(initializeDatabase(env)).not.toBe(initializeDatabase(env))
+  })
+
+  it('初始化失败不写缓存，下一次调用会重新执行', async () => {
+    const sqlite = new DatabaseSync(':memory:')
+    const base = makeDb(sqlite)
+    let failOnce = true
+    const flaky = {
+      prepare(sql: string) {
+        const prepared = base.prepare(sql)
+        if (!failOnce) return prepared
+        return {
+          ...prepared,
+          async first() {
+            failOnce = false
+            throw new Error('D1 瞬时故障')
+          },
+        }
+      },
+      batch: base.batch.bind(base),
+    } as unknown as D1Database
+    vi.stubGlobal('crypto', webcrypto)
+    const env = { DB: flaky, APP_NAME: 'Inkstone' } as unknown as Env
+
+    await expect(initializeDatabase(env)).rejects.toThrow('D1 瞬时故障')
+    expect(await initializeDatabase(env)).toBeTruthy()
+  })
 })
