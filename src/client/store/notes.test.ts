@@ -464,3 +464,19 @@ it('keeps a queued folder when replaying fails so it can retry later', async () 
   expect(mocks.folders).toHaveLength(1)
   expect(useNotes.getState().folders.some((item) => item.id === id)).toBe(true)
 })
+
+it('keeps local summary fields when a write response omits them', async () => {
+  const stored = {
+    ...note,
+    summary: { text: 'saved text', origin: 'ai' as const, status: 'current' as const, updatedAt: 9 },
+    summarySettings: { summaryEnabled: false, aiMode: 'inherit' as const, autoGenerate: null },
+  }
+  useNotes.setState({ notes: { [note.id]: stored }, contents: { [note.id]: note.content } })
+  mocks.patch.mockResolvedValue({ ...note, isStarred: true, rev: 2, summary: undefined, summarySettings: undefined })
+
+  await useNotes.getState().patchNote(note.id, { isStarred: true })
+  await vi.waitFor(() => expect(useNotes.getState().notes[note.id].rev).toBe(2))
+
+  expect(useNotes.getState().notes[note.id].summarySettings).toEqual(stored.summarySettings)
+  expect(useNotes.getState().notes[note.id].summary?.text).toBe('saved text')
+})

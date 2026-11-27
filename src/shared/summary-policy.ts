@@ -62,7 +62,9 @@ export function computeSummaryPolicy(input: {
   const { instance, user, note } = input
   const canGenerate = instance.enabled && user.enabled && note.aiMode !== 'disabled'
   const autoOn = note.autoGenerate ?? user.autoGenerate
-  const autoEligible = canGenerate && instance.allowAutoGenerate && autoOn
+  // 单篇关闭摘要即完全退出自动生成，否则编辑正文仍会排队。
+  const autoEligible =
+    canGenerate && note.summaryEnabled !== false && instance.allowAutoGenerate && autoOn
   const visible = note.summaryEnabled ?? (input.hasSummary || autoEligible)
   return {
     ...note,

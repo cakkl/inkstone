@@ -288,7 +288,7 @@ notesRoutes.post('/', async (c) => {
     )
       .bind(id, userId)
       .first<NoteRow>()
-    if (existing) return c.json(toNote(existing))
+    if (existing) return c.json(await withNoteSummaries(c.env.DB, userId, toNote(existing)))
     const collision = await c.env.DB.prepare(`SELECT user_id FROM notes WHERE id = ?1`)
       .bind(id)
       .first<{ user_id: string }>()
@@ -340,7 +340,7 @@ notesRoutes.post('/', async (c) => {
     await enqueueNoteIndex(c.env.DB, userId, id, 'embed')
     scheduleFtsDrain(c)
   }
-  const note = toNote(created)
+  const note = await withNoteSummaries(c.env.DB, userId, toNote(created))
   return c.json(note, insertResult?.meta.changes ? 201 : 200)
 })
 
@@ -369,7 +369,9 @@ notesRoutes.patch('/:id', async (c) => {
     throw ApiError.badRequest('rev must be a positive integer')
   }
   if (body.rev !== row.rev) {
-    throw ApiError.conflict('This note was modified elsewhere', { server: toNote(row) })
+    throw ApiError.conflict('This note was modified elsewhere', {
+      server: await withNoteSummaries(c.env.DB, userId, toNote(row)),
+    })
   }
   if (body.content !== undefined && typeof body.content !== 'string') {
     throw ApiError.badRequest('content must be a string')
@@ -429,7 +431,7 @@ notesRoutes.patch('/:id', async (c) => {
   if (typeof body.isStarred === 'boolean' && Number(body.isStarred) !== row.is_starred) push(sets, binds, 'is_starred', body.isStarred ? 1 : 0)
   if (typeof body.isArchived === 'boolean' && Number(body.isArchived) !== row.is_archived) push(sets, binds, 'is_archived', body.isArchived ? 1 : 0)
 
-  if (!sets.length) return c.json(toNote(row))
+  if (!sets.length) return c.json(await withNoteSummaries(c.env.DB, userId, toNote(row)))
 
   push(sets, binds, 'updated_at', now)
   const nextRev = row.rev + 1
@@ -577,7 +579,7 @@ notesRoutes.patch('/:id', async (c) => {
     }).catch(() => undefined)
   }
   const nextTags = contentChanged ? (derivedTags ?? extractTags(newContent)) : null
-  return c.json(toNote(applyPatchRow(row, sets, binds, nextTags)))
+  return c.json(await withNoteSummaries(c.env.DB, userId, toNote(applyPatchRow(row, sets, binds, nextTags))))
 })
 
 notesRoutes.delete('/:id', async (c) => {
@@ -636,7 +638,7 @@ notesRoutes.delete('/:id', async (c) => {
   scheduleFtsDrain(c)
   // 进回收站就别再排摘要任务，恢复时按新正文重新登记。
   await dropQueuedSummary(c.env.DB, userId, id).catch(() => undefined)
-  const note = toNote({ ...row, deleted_at: now, updated_at: now, rev: nextRev })
+  const note = await withNoteSummaries(c.env.DB, userId, toNote({ ...row, deleted_at: now, updated_at: now, rev: nextRev }))
   return c.json(note)
 })
 
@@ -997,6 +999,16 @@ async function loadNote(db: D1Database, userId: string, id: string): Promise<Not
     loadNoteSummaryBundles(db, userId, [id]),
   ])
   return attachNoteSummaries([toNote(row)], bundles)[0]!
+}
+
+/** 写操作返回的单篇笔记同样要带摘要字段，否则客户端 adoptNote 会把本地设置冲成默认值。 */
+async function withNoteSummaries<T extends { id: string }>(
+  db: D1Database,
+  userId: string,
+  note: T,
+): Promise<T> {
+  const bundles = await loadNoteSummaryBundles(db, userId, [note.id])
+  return attachNoteSummaries([note], bundles)[0]!
 }
 
 async function loadNoteRow(db: D1Database, userId: string, id: string): Promise<NoteRow> {
