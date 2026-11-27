@@ -1975,7 +1975,10 @@ function adoptNote(note: Note | NoteSummary, set: SetNotesState, get: () => Note
     let shellChanged = false;
     set((state) => {
         const currentSummary = state.notes[note.id];
-        const reconciled = applyPendingNoteMutations(note.id, mergeDirtySummary(currentSummary, incomingSummary));
+        const reconciled = applyPendingNoteMutations(
+            note.id,
+            mergeDirtySummary(currentSummary, keepLocalSummaryExtras(incomingSummary, currentSummary)),
+        );
         const nextSummary = currentSummary && noteSummaryEqual(currentSummary, reconciled)
             ? currentSummary
             : reconciled;
@@ -2006,6 +2009,17 @@ function adoptNote(note: Note | NoteSummary, set: SetNotesState, get: () => Note
 function stripContent(note: Note | NoteSummary): NoteSummary {
     const { content: _content, ...summary } = note as Note;
     return summary;
+}
+/** 写操作的响应不带摘要本体与单篇设置（见 toNote）。undefined 表示本次未涉及，不是已清空。 */
+function keepLocalSummaryExtras(incoming: NoteSummary, current: NoteSummary | undefined): NoteSummary {
+    if (!current)
+        return incoming;
+    const next: NoteSummary = { ...incoming };
+    if (incoming.summary === undefined)
+        next.summary = current.summary;
+    if (incoming.summarySettings === undefined)
+        next.summarySettings = current.summarySettings;
+    return next;
 }
 function hasOwnContent(contents: Record<string, string>, id: string): boolean {
     return Object.prototype.hasOwnProperty.call(contents, id);

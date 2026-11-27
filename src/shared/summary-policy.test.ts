@@ -94,6 +94,17 @@ describe('computeSummaryPolicy', () => {
     })
     expect(on.autoEligible).toBe(true)
   })
+
+  it('单篇关闭摘要后不进入自动生成队列', () => {
+    const policy = computeSummaryPolicy({
+      instance: INSTANCE_ON,
+      user: USER_ON,
+      note: { summaryEnabled: false, aiMode: 'inherit', autoGenerate: null },
+      hasSummary: false,
+    })
+    expect(policy.autoEligible).toBe(false)
+    expect(policy.visible).toBe(false)
+  })
 })
 
 describe('normalizeNoteSummarySettings', () => {
