@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyRound, Lock, Moon, Sparkles, Sun } from 'lucide-react';
 import { LIMITS } from '@shared/constants';
-import type { PublicNote } from '@shared/types';
+import type { PublicNote, ShareLink } from '@shared/types';
 import { api, ApiError } from '../../lib/api';
 import { fullTime } from '../../lib/time';
 import { readingMinutes, countText } from '@shared/markdown-utils';
@@ -13,6 +13,7 @@ import { LoadingBlock } from '../../components/feedback';
 import { Tooltip } from '../../components/overlay';
 import { useUi } from '../../store/ui';
 import { moveMarkdownTabFocus, selectMarkdownTab } from '../preview/markdown-tabs';
+import { applyShareFileAccess, applyShareLinks, createShareEmbedResolver, type ShareEmbedResolver } from './share-embeds';
 import { t, useLocale } from "../../lib/i18n";
 
 export function SharePage({ slug }: {
@@ -29,6 +30,7 @@ export function SharePage({ slug }: {
     const hostRef = useRef<HTMLDivElement>(null);
     const requestRef = useRef<AbortController | null>(null);
     const enhancementRevisionRef = useRef(0);
+    const resolverRef = useRef<ShareEmbedResolver | null>(null);
     const copyResetTimersRef = useRef(new Map<HTMLElement, number>());
     const originalTitleRef = useRef(document.title);
     const appliedTitleRef = useRef<string | null>(null);
@@ -90,18 +92,30 @@ export function SharePage({ slug }: {
         const result = renderMarkdown(note.content);
         return {
             ...result,
-            html: addShareAccess(result.html, note.share.slug),
+            html: addShareAccess(result.html, note.share.slug, note.links ?? []),
         };
     }, [note, locale]);
     const htmlObj = useMemo(() => ({ __html: rendered?.html ?? '' }), [rendered]);
     useEffect(() => {
-        if (!rendered || !hostRef.current)
+        if (!rendered || !note || !hostRef.current)
             return;
         const host = hostRef.current;
         const revision = ++enhancementRevisionRef.current;
         let cancelled = false;
         const isCurrent = () => !cancelled && enhancementRevisionRef.current === revision && hostRef.current === host;
         void (async () => {
+            const resolver = createShareEmbedResolver({
+                slug: note.share.slug,
+                content: note.content,
+                links: note.links ?? [],
+                unlocks: note.unlocks ?? [],
+                isCurrent,
+            });
+            resolverRef.current = resolver;
+            // 嵌入必须在 enhance 之前展开，否则嵌套内容里的公式/mermaid 不会被处理。
+            await resolver.resolve(host);
+            if (!isCurrent())
+                return;
             await enhancePreview(host, { math: true, mermaid: true, dark, codeBlockCollapseLines: 24 });
             if (!isCurrent())
                 return;
@@ -110,7 +124,7 @@ export function SharePage({ slug }: {
         return () => {
             cancelled = true;
         };
-    }, [rendered, dark]);
+    }, [rendered, dark, note]);
     useEffect(() => () => {
         enhancementRevisionRef.current++;
         for (const timer of copyResetTimersRef.current.values())
@@ -119,6 +133,27 @@ export function SharePage({ slug }: {
     }, []);
     const onContentClick = (event: React.MouseEvent) => {
         const target = event.target as HTMLElement;
+        const unlockButton = target.closest<HTMLElement>('[data-share-unlock]');
+        if (unlockButton) {
+            const embed = unlockButton.closest<HTMLElement>('.note-embed');
+            const input = embed?.querySelector<HTMLInputElement>('[data-share-password]');
+            const host = hostRef.current;
+            const password = input?.value ?? '';
+            if (embed && host && password) {
+                unlockButton.setAttribute('disabled', 'true');
+                void (async () => {
+                    try {
+                        await resolverRef.current?.unlock(embed, password);
+                        await enhancePreview(embed, { math: true, mermaid: true, dark, codeBlockCollapseLines: 24 });
+                        await renderPendingMermaid(host, dark, { isCurrent: () => hostRef.current === host });
+                    }
+                    finally {
+                        unlockButton.removeAttribute('disabled');
+                    }
+                })();
+            }
+            return;
+        }
         const mermaidRetry = target.closest<HTMLElement>('[data-mermaid-retry]');
         if (mermaidRetry) {
             const block = mermaidRetry.closest<HTMLElement>('[data-mermaid]');
@@ -170,6 +205,12 @@ export function SharePage({ slug }: {
         }
     };
     const onContentKeyDown = (event: React.KeyboardEvent) => {
+        const passwordInput = (event.target as HTMLElement).closest<HTMLInputElement>('[data-share-password]');
+        if (passwordInput && event.key === 'Enter') {
+            event.preventDefault();
+            passwordInput.parentElement?.querySelector<HTMLElement>('[data-share-unlock]')?.click();
+            return;
+        }
         const tab = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-tab-button]');
         if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
             event.preventDefault();
@@ -251,7 +292,7 @@ export function SharePage({ slug }: {
               </section>
             )}
 
-            <div ref={hostRef} onClick={onContentClick} onKeyDown={onContentKeyDown} className="ink-prose" style={{ maxWidth: 'none' }} dangerouslySetInnerHTML={htmlObj}/>
+            <div ref={hostRef} onClick={onContentClick} onKeyDown={onContentKeyDown} className="ink-prose share-prose" style={{ maxWidth: 'none' }} dangerouslySetInnerHTML={htmlObj}/>
 
             <footer className="mt-16 border-t border-[var(--border-subtle)] pt-6 text-center">
               <a href="/" className="inline-flex items-center gap-1.5 text-[11.5px] text-[var(--text-quaternary)] transition-colors hover:text-[var(--accent)]">
@@ -261,40 +302,16 @@ export function SharePage({ slug }: {
       </main>
     </div>);
 }
-function addShareAccess(html: string, slug: string): string {
+function addShareAccess(html: string, slug: string, links: ShareLink[]): string {
     const template = document.createElement('template');
     template.innerHTML = html;
-    for (const embed of template.content.querySelectorAll<HTMLElement>('.note-embed[data-embed-target]')) {
-        embed.removeAttribute('data-embed-target');
-        embed.classList.remove('loading');
-        embed.classList.add('error');
-        const body = embed.querySelector<HTMLElement>('.note-embed-body');
-        if (body) {
-            body.removeAttribute('aria-busy');
-            body.textContent = t("share.embedded_private_notes_are_not_included_in_public_shares");
-        }
-    }
     for (const task of template.content.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox')) {
         task.disabled = true;
         task.removeAttribute('data-task-line');
         task.setAttribute('aria-label', t("share.tasks_in_public_shares_are_read_only"));
     }
-    for (const element of template.content.querySelectorAll<HTMLImageElement | HTMLAnchorElement>('img[src], a[href]')) {
-        const attr = element instanceof HTMLImageElement ? 'src' : 'href';
-        const raw = element.getAttribute(attr);
-        if (!raw)
-            continue;
-        try {
-            const url = new URL(raw, window.location.origin);
-            if (url.origin !== window.location.origin ||
-                !/^\/api\/files\/[0-9a-hjkmnp-tv-z]{26}$/i.test(url.pathname)) {
-                continue;
-            }
-            url.searchParams.set('share', slug);
-            element.setAttribute(attr, `${url.pathname}${url.search}`);
-        }
-        catch {
-        }
-    }
+    // 嵌入由 createShareEmbedResolver 异步处理：按解析结果决定展开、要求口令或标记未公开。
+    applyShareLinks(template.content, links);
+    applyShareFileAccess(template.content, slug);
     return template.innerHTML;
 }

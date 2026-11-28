@@ -27,8 +27,10 @@ import type {
   PublicNote,
   SearchResponse,
   SessionInfo,
+  ShareEmbed,
   ShareInfo,
   ShareListItem,
+  ShareUnlock,
   SyncResponse,
   Tag,
   TestConnectionResult,
@@ -505,6 +507,12 @@ export const api = {
     remove: (noteId: string) => request<{ ok: true }>(`/api/share/${noteId}`, { method: 'DELETE' }),
     read: (slug: string, password?: string, signal?: AbortSignal) =>
       request<PublicNote>(`/api/public/${slug}`, { method: 'POST', body: { password }, signal }),
+    embed: (slug: string, key: string, password?: string, unlocks?: ShareUnlock[], signal?: AbortSignal) =>
+      request<ShareEmbed>(`/api/public/${slug}/embed`, {
+        method: 'POST',
+        body: { key, password, unlocks },
+        signal,
+      }),
   },
 
   transfer: {

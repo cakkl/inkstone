@@ -1,12 +1,13 @@
 import { Hono, type Context } from 'hono'
 import { setCookie } from 'hono/cookie'
 import { LIMITS } from '@shared/constants'
-import type { PublicNote, ShareInfo, ShareListItem } from '@shared/types'
+import type { PublicNote, ShareEmbed, ShareInfo, ShareListItem } from '@shared/types'
 import type { AppBindings } from '../env'
 import { ApiError } from '../lib/errors'
 import { isValidSlug, newSlug } from '../lib/id'
 import { JSON_BODY_LIMITS, readJson, readOptionalJson, requestClientIp } from '../lib/request'
 import { hashPassword, verifyPassword } from '../lib/password'
+import { resolveShareLinks, resolveShareTarget } from '../lib/share-links'
 import {
   createShareAssetSession,
   shareAssetCookieName,
@@ -185,44 +186,8 @@ shareRoutes.post('/:slug', async (c) => {
   if (share.expires_at && share.expires_at < Date.now()) throw ApiError.notFound('The link has expired')
 
   if (share.password_hash) {
-    if (!password) {
-      return c.json({ error: { code: 'password_required', message: 'An access password is required' } }, 401)
-    }
-    const throttleKeys = [
-      `share:${slug}:ip:${requestClientIp(c)}`,
-      { key: `share-slug:${slug}`, freeFails: 40 },
-    ]
-    const workKeys = [
-      {
-        key: `share-work:${slug}:ip:${requestClientIp(c)}`,
-        maxAttempts: 8,
-        windowMs: 10 * 60 * 1000,
-      },
-      {
-        key: `share-work-slug:${slug}`,
-        maxAttempts: 60,
-        windowMs: 10 * 60 * 1000,
-      },
-    ]
-    try {
-      await consumeAttemptBudget(c.env.DB, workKeys)
-      await assertNotLocked(c.env.DB, throttleKeys)
-    } catch (err) {
-      if (err instanceof ThrottleError) {
-        throw new ApiError(429, 'too_many_attempts', `Too many attempts. Try again in ${err.retryAfterSec} seconds`, {
-          retryAfter: err.retryAfterSec,
-        })
-      }
-      throw err
-    }
-    if (!(await verifyPassword(password, share.password_hash))) {
-      await recordLoginFailure(c.env.DB, throttleKeys)
-      return c.json({ error: { code: 'password_invalid', message: "Incorrect passcode" } }, 401)
-    }
-    await clearLoginFailures(c.env.DB, [
-      ...throttleKeys,
-      ...workKeys.map((target) => target.key),
-    ])
+    const denied = await checkSharePassword(c, slug, share.password_hash, password)
+    if (denied) return denied
   }
 
   const note = await c.env.DB.prepare(
@@ -245,19 +210,9 @@ shareRoutes.post('/:slug', async (c) => {
     c.env.DB.prepare(`UPDATE shares SET views = views + 1 WHERE slug = ?1`).bind(slug).run().catch(() => {}),
   )
 
+  let rootUnlock: string | null = null
   if (share.password_hash) {
-    const expiresAt = Math.min(
-      share.expires_at ?? Number.MAX_SAFE_INTEGER,
-      Date.now() + 12 * 60 * 60 * 1000,
-    )
-    const token = await createShareAssetSession(c.env.DB, slug, share.password_hash, expiresAt)
-    setCookie(c, shareAssetCookieName(slug), token, {
-      path: '/api/files/',
-      httpOnly: true,
-      sameSite: 'Strict',
-      maxAge: Math.max(1, Math.floor((expiresAt - Date.now()) / 1000)),
-      secure: new URL(c.req.url).protocol === 'https:',
-    })
+    rootUnlock = await issueShareAssetSession(c, slug, share.password_hash, share.expires_at)
   }
 
   // 只在分享者开启时读取摘要，避免无谓查询与误外发。
@@ -269,6 +224,7 @@ shareRoutes.post('/:slug', async (c) => {
       .first<{ summary_text: string; updated_at: number }>()
     : null
 
+  const links = await resolveShareLinks(c.env.DB, share.user_id, share.note_id)
   const body_: PublicNote = {
     title: note.title,
     content: note.content,
@@ -278,9 +234,158 @@ shareRoutes.post('/:slug', async (c) => {
     author: { name: note.name, avatarUrl: note.avatar_url },
     site: { name: c.env.APP_NAME || 'Inkstone' },
     share: { slug },
+    links,
+    ...(rootUnlock ? { unlocks: [{ slug, token: rootUnlock }] } : {}),
   }
   return c.json(body_)
 })
+
+/** 单次嵌入响应的服务端硬上限，客户端另有总字符上限。 */
+const EMBED_MAX_CHARS = 200_000
+
+shareRoutes.post('/:slug/embed', async (c) => {
+  const slug = c.req.param('slug')
+  if (!isValidSlug(slug)) throw ApiError.notFound('The link does not exist or has been revoked')
+  const body = await readOptionalJson<{
+    key?: string
+    password?: string
+    unlocks?: unknown
+  }>(c, JSON_BODY_LIMITS.small, {})
+  const key = typeof body.key === 'string' ? body.key.trim().slice(0, 400) : ''
+  if (!key) throw ApiError.badRequest('key is required')
+  const password = typeof body.password === 'string'
+    ? body.password.slice(0, LIMITS.passwordMaxLength)
+    : ''
+  const unlocks = parseUnlocks(body.unlocks)
+
+  // 轻量配额：防止把展开接口当作逐 key 探测工具。
+  try {
+    await consumeAttemptBudget(c.env.DB, [{
+      key: `share-embed:ip:${requestClientIp(c)}`,
+      maxAttempts: 60,
+      windowMs: 60 * 1000,
+    }])
+  } catch (err) {
+    if (err instanceof ThrottleError) {
+      throw new ApiError(429, 'too_many_attempts', `Too many attempts. Try again in ${err.retryAfterSec} seconds`, {
+        retryAfter: err.retryAfterSec,
+      })
+    }
+    throw err
+  }
+
+  // 目标必须在「从本分享出发、每一跳都已解锁」的链上；未公开/已过期/未解锁的一律 404。
+  const target = await resolveShareTarget(c.env.DB, slug, key, (nodeSlug) => unlocks.get(nodeSlug))
+  if (!target) throw ApiError.notFound('The linked note is not shared')
+
+  let targetUnlock: string | null = null
+  if (target.passwordHash) {
+    const denied = await checkSharePassword(c, target.shareSlug, target.passwordHash, password)
+    if (denied) return denied
+    targetUnlock = await issueShareAssetSession(c, target.shareSlug, target.passwordHash, null)
+  }
+
+  const note = await c.env.DB.prepare(
+    `SELECT title, content FROM notes WHERE id = ?1 AND user_id = ?2 AND deleted_at IS NULL`,
+  ).bind(target.noteId, target.userId).first<{ title: string; content: string }>()
+  if (!note) throw ApiError.notFound('The note has been deleted')
+  if (note.content.length > EMBED_MAX_CHARS) {
+    return c.json({
+      error: { code: 'content_too_large', message: 'The embedded note is too large to render inline' },
+    }, 413)
+  }
+
+  const links = await resolveShareLinks(c.env.DB, target.userId, target.noteId)
+  const payload: ShareEmbed = {
+    key,
+    state: target.passwordHash ? 'password' : 'shared',
+    slug: target.shareSlug,
+    title: note.title,
+    content: note.content,
+    links,
+    ...(targetUnlock ? { unlocks: [{ slug: target.shareSlug, token: targetUnlock }] } : {}),
+  }
+  return c.json(payload)
+})
+
+/** 校验分享口令；失败时返回要直接回给客户端的响应。限流与失败记账与 /api/public/:slug 共用。 */
+async function checkSharePassword(
+  c: Context<AppBindings>,
+  slug: string,
+  passwordHash: string,
+  password: string,
+): Promise<Response | null> {
+  if (!password) {
+    return c.json({ error: { code: 'password_required', message: 'An access password is required' } }, 401)
+  }
+  const throttleKeys = [
+    `share:${slug}:ip:${requestClientIp(c)}`,
+    { key: `share-slug:${slug}`, freeFails: 40 },
+  ]
+  const workKeys = [
+    {
+      key: `share-work:${slug}:ip:${requestClientIp(c)}`,
+      maxAttempts: 8,
+      windowMs: 10 * 60 * 1000,
+    },
+    {
+      key: `share-work-slug:${slug}`,
+      maxAttempts: 60,
+      windowMs: 10 * 60 * 1000,
+    },
+  ]
+  try {
+    await consumeAttemptBudget(c.env.DB, workKeys)
+    await assertNotLocked(c.env.DB, throttleKeys)
+  } catch (err) {
+    if (err instanceof ThrottleError) {
+      throw new ApiError(429, 'too_many_attempts', `Too many attempts. Try again in ${err.retryAfterSec} seconds`, {
+        retryAfter: err.retryAfterSec,
+      })
+    }
+    throw err
+  }
+  if (!(await verifyPassword(password, passwordHash))) {
+    await recordLoginFailure(c.env.DB, throttleKeys)
+    return c.json({ error: { code: 'password_invalid', message: 'Incorrect passcode' } }, 401)
+  }
+  await clearLoginFailures(c.env.DB, [...throttleKeys, ...workKeys.map((target) => target.key)])
+  return null
+}
+
+/** 口令通过后签发附件会话（并写 cookie），返回给客户端在后续嵌入请求里回传。 */
+async function issueShareAssetSession(
+  c: Context<AppBindings>,
+  slug: string,
+  passwordHash: string,
+  expiresAt: number | null,
+): Promise<string> {
+  const until = Math.min(expiresAt ?? Number.MAX_SAFE_INTEGER, Date.now() + 12 * 60 * 60 * 1000)
+  const token = await createShareAssetSession(c.env.DB, slug, passwordHash, until)
+  setCookie(c, shareAssetCookieName(slug), token, {
+    path: '/api/files/',
+    httpOnly: true,
+    sameSite: 'Strict',
+    maxAge: Math.max(1, Math.floor((until - Date.now()) / 1000)),
+    secure: new URL(c.req.url).protocol === 'https:',
+  })
+  return token
+}
+
+/** 客户端回传的口令会话凭证：最多 8 条，slug 与 token 都做合法性校验。 */
+function parseUnlocks(value: unknown): Map<string, string> {
+  const unlocks = new Map<string, string>()
+  if (!Array.isArray(value)) return unlocks
+  for (const item of value.slice(0, 8)) {
+    if (!item || typeof item !== 'object') continue
+    const slug = (item as { slug?: unknown }).slug
+    const token = (item as { token?: unknown }).token
+    if (typeof slug === 'string' && isValidSlug(slug) && typeof token === 'string' && token.length <= 128) {
+      unlocks.set(slug, token)
+    }
+  }
+  return unlocks
+}
 
 
 sharePageRoutes.get('/:slug', async (c) => {
