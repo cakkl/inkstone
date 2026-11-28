@@ -1014,7 +1014,12 @@ async function writeTool(
 
 function requireScope(ctx: ServerContext, fallback: McpAuthProps, required: string): void {
   const scopes = ctx.http?.authInfo?.scopes?.length ? ctx.http.authInfo.scopes : fallback.scopes
-  if (!scopes.includes(required)) throw ApiError.forbidden(`OAuth scope required: ${required}`)
+  if (!scopes.includes(required)) {
+    // 带上已授予的 scope，客户端才能分清是「授权时没勾」还是「密钥建立得比权限早」。
+    throw ApiError.forbidden(
+      `OAuth scope required: ${required}; this grant has: ${scopes.join(' ') || '(none)'}`,
+    )
+  }
 }
 
 /** 失败时同样给出符合 outputSchema 的 structuredContent，否则严格客户端会判响应不合法。 */

@@ -48,8 +48,10 @@ export function generateApiKey(): string {
 }
 
 export function parseApiKey(token: string): string | null {
-  if (token.length > 128 || !KEY_TOKEN_RE.test(token)) return null
-  return token
+  // 客户端常把 header 值连同空白或换行一起送来；先裁剪再校验，避免合法密钥被判格式错误。
+  const trimmed = token.trim()
+  if (trimmed.length > 128 || !KEY_TOKEN_RE.test(trimmed)) return null
+  return trimmed
 }
 
 export async function createMcpApiKey(
