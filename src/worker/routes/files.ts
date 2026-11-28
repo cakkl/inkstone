@@ -22,6 +22,7 @@ import { isInlineSafe } from '../lib/image'
 import { FORM_BODY_LIMITS, readFormDataWithinLimit } from '../lib/request'
 import { consumeAttemptBudget, ThrottleError } from '../lib/throttle'
 import { shareAssetCookieName, verifyShareAssetSession } from '../lib/share-asset-session'
+import { resolveShareTarget } from '../lib/share-links'
 import { requireAuth } from '../middleware/auth'
 
 export const filesRoutes = new Hono<AppBindings>()
@@ -197,26 +198,55 @@ filesRoutes.get('/:id', async (c) => {
   const userId = c.get('userId')
   let allowed = Boolean(userId && userId === row.user_id)
   if (!allowed && isValidSlug(shareSlug)) {
-    const share = await c.env.DB.prepare(
-      `SELECT s.slug, s.password_hash, n.content
-         FROM shares s
-         JOIN notes n ON n.id = s.note_id AND n.user_id = s.user_id
-        WHERE s.slug = ?1 AND s.user_id = ?2 AND n.deleted_at IS NULL
-          AND (s.expires_at IS NULL OR s.expires_at > ?3)`,
-    )
-      .bind(shareSlug, row.user_id, Date.now())
-      .first<{ slug: string; password_hash: string | null; content: string }>()
-    allowed = Boolean(
-      share &&
-        extractAttachmentIds(share.content).includes(row.id) &&
-        (!share.password_hash ||
-          (await verifyShareAssetSession(
-            c.env.DB,
-            getCookie(c, shareAssetCookieName(shareSlug)),
-            share.slug,
-            share.password_hash,
-          ))),
-    )
+    // k 存在 = 附件来自分享页里展开的嵌入笔记；否则是分享笔记本身。
+    const shareKey = c.req.query('k')
+    if (shareKey) {
+      // 链路逐跳校验：路径上加密的笔记必须有对应的附件会话 cookie。
+      const target = await resolveShareTarget(
+        c.env.DB,
+        shareSlug,
+        shareKey.slice(0, 400),
+        (nodeSlug) => getCookie(c, shareAssetCookieName(nodeSlug)),
+      )
+      const note = target
+        ? await c.env.DB.prepare(
+          `SELECT content FROM notes WHERE id = ?1 AND user_id = ?2 AND deleted_at IS NULL`,
+        ).bind(target.noteId, target.userId).first<{ content: string }>()
+        : null
+      allowed = Boolean(
+        target &&
+          note &&
+          extractAttachmentIds(note.content).includes(row.id) &&
+          (!target.passwordHash ||
+            (await verifyShareAssetSession(
+              c.env.DB,
+              getCookie(c, shareAssetCookieName(target.shareSlug)),
+              target.shareSlug,
+              target.passwordHash,
+            ))),
+      )
+    } else {
+      const share = await c.env.DB.prepare(
+        `SELECT s.slug, s.password_hash, n.content
+           FROM shares s
+           JOIN notes n ON n.id = s.note_id AND n.user_id = s.user_id
+          WHERE s.slug = ?1 AND s.user_id = ?2 AND n.deleted_at IS NULL
+            AND (s.expires_at IS NULL OR s.expires_at > ?3)`,
+      )
+        .bind(shareSlug, row.user_id, Date.now())
+        .first<{ slug: string; password_hash: string | null; content: string }>()
+      allowed = Boolean(
+        share &&
+          extractAttachmentIds(share.content).includes(row.id) &&
+          (!share.password_hash ||
+            (await verifyShareAssetSession(
+              c.env.DB,
+              getCookie(c, shareAssetCookieName(shareSlug)),
+              share.slug,
+              share.password_hash,
+            ))),
+      )
+    }
   }
   if (!allowed) throw ApiError.unauthenticated('You do not have access to this attachment')
 

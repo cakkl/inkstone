@@ -570,6 +570,25 @@ export interface ShareListItem extends ShareInfo {
   deletedAt: number | null
 }
 
+export type ShareLinkState = 'shared' | 'password' | 'unavailable'
+
+/** 某一次成功解锁的口令会话，客户端在后续嵌入请求里回传。 */
+export interface ShareUnlock {
+  slug: string
+  token: string
+}
+
+/** 分享页可解析的链接目标：仅限作者已公开分享的笔记。 */
+export interface ShareLink {
+  /** normalizeLinkKey(target)，与 links.target_key 同口径。 */
+  key: string
+  state: ShareLinkState
+  /** state 为 shared / password 时才存在。 */
+  slug?: string
+  /** 目标的当前标题，仅 state 为 shared / password 时存在。 */
+  title?: string
+}
+
 export interface PublicNote {
   title: string
   content: string
@@ -580,6 +599,22 @@ export interface PublicNote {
   author: { name: string; avatarUrl: string }
   site: { name: string }
   share: { slug: string }
+  /** 正文中 wiki 链接/嵌入的解析结果；未公开的目标不出现在标题里。 */
+  links?: ShareLink[]
+  /** 根分享已加密时回传的解锁凭证，用于继续展开链上的嵌入。 */
+  unlocks?: ShareUnlock[]
+}
+
+/** 分享页按需拉取的嵌入内容：一次一跳，由客户端递归展开。 */
+export interface ShareEmbed {
+  key: string
+  state: Exclude<ShareLinkState, 'unavailable'>
+  slug: string
+  title: string
+  content: string
+  links: ShareLink[]
+  /** 目标本身加密时，本次解锁得到的凭证，供客户端继续往下展开。 */
+  unlocks?: ShareUnlock[]
 }
 
 

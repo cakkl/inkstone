@@ -682,6 +682,73 @@
 .ink-prose .note-embed-body > :last-child { margin-bottom: 0.65em; }
 .ink-prose .note-embed.loading .note-embed-body,
 .ink-prose .note-embed.error .note-embed-body { color: var(--text-tertiary); font-size: 0.9em; }
+
+/* 分享页嵌入卡片的口令行：数值对齐 components/form.tsx 的 Input 与 primitives.tsx 的 Button(secondary)。
+   唯一的差异是输入框底色用 --bg-surface —— 卡片本身是 --bg-inset，同色会看不出边界。 */
+.share-prose .note-embed-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0.15em 0 0.45em;
+}
+.share-prose .note-embed-prompt input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.share-prose .note-embed-prompt input::placeholder { color: var(--text-quaternary); }
+.share-prose .note-embed-prompt input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.share-prose .note-embed-prompt button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.share-prose .note-embed-prompt button:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.share-prose .note-embed-prompt button:active { transform: translateY(1px); }
+.share-prose .note-embed-prompt button:disabled { pointer-events: none; opacity: 0.45; }
+@media (min-width: 768px) {
+  .share-prose .note-embed-prompt input { height: 34px; }
+  .share-prose .note-embed-prompt button { height: 32px; padding: 0 12px; }
+}
+.share-prose .note-embed-hint {
+  margin: 0 0 0.55em;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+/* 短状态文案（未公开/加载中）在卡片内居中，上下留白对称。 */
+.share-prose .note-embed.error .note-embed-body,
+.share-prose .note-embed.loading .note-embed-body {
+  text-align: center;
+  padding-block: 0.85em;
+}
 .ink-prose [data-block-id] { scroll-margin-top: 24px; }
 .ink-prose [data-block-id]:target {
   border-radius: 4px;
@@ -759,6 +826,11 @@
 }
 .ink-prose .wikilink:hover {
   background: var(--accent-soft);
+}
+.ink-prose .wikilink.locked {
+  text-decoration: underline dashed;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
 }
 .ink-prose .wikilink.missing {
   color: var(--text-tertiary);
