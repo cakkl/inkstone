@@ -11,6 +11,7 @@ import {
   listMcpTags,
   readMcpNote,
   searchMcpNotes,
+  type McpSearchResponse,
 } from './retrieval'
 import { getMcpPreferences, MCP_SCOPES } from './settings'
 import {
@@ -73,6 +74,45 @@ Work with content: Markdown is the source of truth. Use get_note_context for lin
 Respect access: Reads require notes:read; most writes require notes:write; moving a note to trash requires separately granted notes:trash and is reversible. A /s/<slug> URL is a public share, possibly password protected or expiring. Use get_note_share to inspect a share, and create or change public sharing only when the user explicitly asks. Read attachments in chunks; uploads have storage, quota, and rate limits. Backup tools can run existing targets but cannot reveal or change credentials. Permanent purge and account or authentication management are not exposed.`
 
 const generalOutputSchema = z.object({ data: z.record(z.string(), z.unknown()) })
+
+/**
+ * 声明了 outputSchema 的工具，返回必须完全符合它：Zod 生成的 JSON Schema 带
+ * `additionalProperties: false`，严格校验的客户端（如 Hermes）会因多余字段直接报错。
+ */
+export const searchOutputSchema = z.object({
+  results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().url() })),
+  mode: z.enum(['lexical', 'semantic', 'hybrid']).describe('Which retrieval path produced these results'),
+})
+
+export const fetchOutputSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  text: z.string(),
+  url: z.string().url(),
+  metadata: z.record(z.string(), z.unknown()),
+})
+
+/** search 失败时的空结果：字段齐全才能通过 outputSchema 校验，具体错误看 content。 */
+export const EMPTY_SEARCH_RESULT: z.infer<typeof searchOutputSchema> = { results: [], mode: 'lexical' }
+
+/** 返回类型由 schema 推导：字段增删会变成编译错误，防止返回值与 schema 再次脱节。 */
+export function toSearchResult(found: McpSearchResponse): z.infer<typeof searchOutputSchema> {
+  return {
+    results: found.results.map(({ id, title, url }) => ({ id, title, url })),
+    mode: found.mode,
+  }
+}
+
+/** fetch 失败时的占位结果：字段齐全才能通过 outputSchema 校验，具体错误看 content。 */
+export function emptyFetchResult(origin: string, id: string): z.infer<typeof fetchOutputSchema> {
+  return {
+    id,
+    title: '',
+    text: '',
+    url: `${origin.replace(/\/$/, '')}/n/${encodeURIComponent(id)}`,
+    metadata: {},
+  }
+}
 const operationId = z.string().min(8).max(128).describe('Stable UUID or unique request key; reuse only for an exact retry')
 const noteId = z.string().refine(isValidId, 'Invalid Inkstone note id')
 const expectedRev = z.number().int().positive().describe('Current note rev returned by read_note or fetch')
@@ -90,6 +130,10 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
   }
   const library = { ...writes, origin: options.origin }
 
+  // 未授权的工具不注册，模型不会调了才吃 403；运行时 requireScope 仍保留，权限可在授权后被收回。
+  const canWrite = options.auth.scopes.includes(MCP_SCOPES.write)
+  const canTrash = options.auth.scopes.includes(MCP_SCOPES.trash)
+
   server.registerTool(
     'search',
     {
@@ -100,9 +144,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
         mode: z.enum(['auto', 'lexical', 'semantic', 'hybrid']).default('auto')
           .describe('auto: hybrid when AI semantic search is enabled, else keyword search; lexical: keyword only; semantic: meaning only; hybrid: both merged'),
       }),
-      outputSchema: z.object({
-        results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().url() })),
-      }),
+      outputSchema: searchOutputSchema,
       annotations: readOnlyAnnotations(),
     },
     async ({ query, mode }, ctx) => safeTool(async () => {
@@ -114,12 +156,8 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
         options.ftsEnabled,
         { query, limit: 8, mode },
       )
-      const value = {
-        results: found.results.map(({ id, title, url }) => ({ id, title, url })),
-        mode: found.mode,
-      }
-      return structured(value)
-    }),
+      return structured(toSearchResult(found))
+    }, () => EMPTY_SEARCH_RESULT),
   )
 
   server.registerTool(
@@ -128,19 +166,13 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
       title: 'Fetch Inkstone note',
       description: 'Fetch one private note by id returned from search. Long notes are bounded and include a cursor for read_note.',
       inputSchema: z.object({ id: z.string().min(1).max(256) }),
-      outputSchema: z.object({
-        id: z.string(),
-        title: z.string(),
-        text: z.string(),
-        url: z.string().url(),
-        metadata: z.record(z.string(), z.unknown()),
-      }),
+      outputSchema: fetchOutputSchema,
       annotations: readOnlyAnnotations(),
     },
     async ({ id }, ctx) => safeTool(async () => {
       requireScope(ctx, options.auth, MCP_SCOPES.read)
       return structured(await fetchMcpNote(options.env.DB, options.auth.userId, options.origin, id))
-    }),
+    }, () => emptyFetchResult(options.origin, id)),
   )
 
   server.registerTool(
@@ -267,7 +299,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     async ({ limit }, ctx) => customTool(ctx, options, () => listMcpTags(options.env.DB, options.auth.userId, limit)),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_note',
     {
       title: 'Create note',
@@ -294,7 +326,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'edit_note',
     {
       title: 'Edit note safely',
@@ -327,7 +359,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'organize_note',
     {
       title: 'Organize note',
@@ -358,7 +390,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canTrash) server.registerTool(
     'trash_note',
     {
       title: 'Move note to trash',
@@ -381,7 +413,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'restore_note',
     {
       title: 'Restore trashed note',
@@ -404,7 +436,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'duplicate_note',
     {
       title: 'Duplicate note',
@@ -459,7 +491,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'restore_note_version',
     {
       title: 'Restore note version',
@@ -484,7 +516,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_folder',
     {
       title: 'Create folder',
@@ -510,7 +542,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'update_folder',
     {
       title: 'Update folder',
@@ -538,7 +570,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_tag',
     {
       title: 'Create tag',
@@ -560,7 +592,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'update_tag',
     {
       title: 'Update tag',
@@ -602,7 +634,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'delete_tag',
     {
       title: 'Delete tag',
@@ -633,7 +665,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'remove_folder_and_promote_contents',
     {
       title: 'Remove folder and promote contents',
@@ -656,7 +688,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'bulk_organize_notes',
     {
       title: 'Bulk organize notes',
@@ -768,7 +800,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'upload_attachment',
     {
       title: 'Upload attachment',
@@ -794,7 +826,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'delete_attachment',
     {
       title: 'Delete attachment',
@@ -809,7 +841,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'run_backup',
     {
       title: 'Run backup',
@@ -861,7 +893,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'update_note_properties',
     {
       title: 'Update note properties',
@@ -911,7 +943,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_note_share',
     {
       title: 'Create note share',
@@ -935,7 +967,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'revoke_note_share',
     {
       title: 'Revoke note share',
@@ -962,7 +994,7 @@ async function customTool(
     requireScope(ctx, options.auth, MCP_SCOPES.read)
     const value = await callback()
     return structuredData(value)
-  })
+  }, (body) => ({ data: body }))
 }
 
 async function writeTool(
@@ -981,15 +1013,24 @@ async function writeTool(
       throw ApiError.forbidden('MCP trash access is disabled in Inkstone settings')
     }
     return structuredData(await callback())
-  })
+  }, (body) => ({ data: body }))
 }
 
 function requireScope(ctx: ServerContext, fallback: McpAuthProps, required: string): void {
   const scopes = ctx.http?.authInfo?.scopes?.length ? ctx.http.authInfo.scopes : fallback.scopes
-  if (!scopes.includes(required)) throw ApiError.forbidden(`OAuth scope required: ${required}`)
+  if (!scopes.includes(required)) {
+    // 带上已授予的 scope，客户端才能分清是「授权时没勾」还是「密钥建立得比权限早」。
+    throw ApiError.forbidden(
+      `OAuth scope required: ${required}; this grant has: ${scopes.join(' ') || '(none)'}`,
+    )
+  }
 }
 
-async function safeTool(callback: () => Promise<ReturnType<typeof structured> | ReturnType<typeof structuredData>>) {
+/** 失败时同样给出符合 outputSchema 的 structuredContent，否则严格客户端会判响应不合法。 */
+async function safeTool<TStructured>(
+  callback: () => Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: TStructured }>,
+  onError: (body: Record<string, unknown>) => TStructured,
+) {
   try {
     return await callback()
   } catch (error) {
@@ -997,6 +1038,7 @@ async function safeTool(callback: () => Promise<ReturnType<typeof structured> | 
     return {
       isError: true as const,
       content: [{ type: 'text' as const, text: JSON.stringify(body) }],
+      structuredContent: onError(body),
     }
   }
 }

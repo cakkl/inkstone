@@ -14,6 +14,8 @@ describe('API key generation', () => {
   it('parses valid keys and rejects malformed ones', () => {
     const key = generateApiKey()
     expect(parseApiKey(key)).toBe(key)
+    // 粘贴常带空白或换行，裁剪后应仍被接受。
+    expect(parseApiKey(`  ${key}\n`)).toBe(key)
     expect(parseApiKey('not-a-key')).toBeNull()
     expect(parseApiKey(`ink_${'a'.repeat(20)}`)).toBeNull()
     expect(parseApiKey(`x${key}`)).toBeNull()

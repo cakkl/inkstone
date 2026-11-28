@@ -5,7 +5,7 @@ import { createApp } from '../app'
 import { initializeDatabase } from '../db/schema'
 import type { Env } from '../env'
 import { consumeAttemptBudget, ThrottleError } from '../lib/throttle'
-import { verifyMcpApiKey } from './api-keys'
+import { parseApiKey, verifyMcpApiKey } from './api-keys'
 import { createInkstoneMcpServer, type McpAuthProps } from './server'
 import { isMcpEnabled, MCP_SUPPORTED_SCOPES } from './settings'
 
@@ -13,6 +13,19 @@ const app = createApp()
 
 export class InkstoneMcpApi extends WorkerEntrypoint<Env, McpAuthProps> {
   async fetch(request: Request): Promise<Response> {
+    try {
+      return await this.handleRequest(request)
+    } catch (error) {
+      // /mcp 不经过 Hono 的 app.onError；未捕获异常统一降级成 JSON，客户端才能区分边缘拦截与服务端故障。
+      console.error('[inkstone] MCP request failed:', error)
+      return Response.json(
+        { error: 'MCP temporarily unavailable', code: 'internal' },
+        { status: 503, headers: { 'cache-control': 'no-store' } },
+      )
+    }
+  }
+
+  private async handleRequest(request: Request): Promise<Response> {
     const database = await initializeDatabase(this.env)
     if (!await isMcpEnabled(this.env.DB)) {
       return Response.json({ error: 'MCP is disabled in Inkstone settings' }, { status: 403 })
@@ -119,7 +132,14 @@ function providerForOrigin(origin: string, env: Env): OAuthProvider<Env> {
       // (cheap after the first request thanks to the initialization cache).
       await initializeDatabase(env)
       const auth = await verifyMcpApiKey(env.DB, token)
-      if (!auth) return null
+      if (!auth) {
+        // 只记原因不记 token：格式不合法与已撤销/查不到，排查方向完全不同。
+        console.warn(
+          '[inkstone] MCP API key rejected:',
+          parseApiKey(token) ? 'unknown-or-revoked' : 'malformed',
+        )
+        return null
+      }
       return {
         props: { userId: auth.userId, role: auth.role, scopes: auth.scopes },
         audience: mcpResource,
