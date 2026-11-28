@@ -130,6 +130,10 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
   }
   const library = { ...writes, origin: options.origin }
 
+  // 未授权的工具不注册，模型不会调了才吃 403；运行时 requireScope 仍保留，权限可在授权后被收回。
+  const canWrite = options.auth.scopes.includes(MCP_SCOPES.write)
+  const canTrash = options.auth.scopes.includes(MCP_SCOPES.trash)
+
   server.registerTool(
     'search',
     {
@@ -295,7 +299,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     async ({ limit }, ctx) => customTool(ctx, options, () => listMcpTags(options.env.DB, options.auth.userId, limit)),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_note',
     {
       title: 'Create note',
@@ -322,7 +326,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'edit_note',
     {
       title: 'Edit note safely',
@@ -355,7 +359,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'organize_note',
     {
       title: 'Organize note',
@@ -386,7 +390,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canTrash) server.registerTool(
     'trash_note',
     {
       title: 'Move note to trash',
@@ -409,7 +413,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'restore_note',
     {
       title: 'Restore trashed note',
@@ -432,7 +436,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'duplicate_note',
     {
       title: 'Duplicate note',
@@ -487,7 +491,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'restore_note_version',
     {
       title: 'Restore note version',
@@ -512,7 +516,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_folder',
     {
       title: 'Create folder',
@@ -538,7 +542,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'update_folder',
     {
       title: 'Update folder',
@@ -566,7 +570,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_tag',
     {
       title: 'Create tag',
@@ -588,7 +592,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'update_tag',
     {
       title: 'Update tag',
@@ -630,7 +634,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'delete_tag',
     {
       title: 'Delete tag',
@@ -661,7 +665,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'remove_folder_and_promote_contents',
     {
       title: 'Remove folder and promote contents',
@@ -684,7 +688,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'bulk_organize_notes',
     {
       title: 'Bulk organize notes',
@@ -796,7 +800,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'upload_attachment',
     {
       title: 'Upload attachment',
@@ -822,7 +826,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'delete_attachment',
     {
       title: 'Delete attachment',
@@ -837,7 +841,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'run_backup',
     {
       title: 'Run backup',
@@ -889,7 +893,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'update_note_properties',
     {
       title: 'Update note properties',
@@ -939,7 +943,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     )),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'create_note_share',
     {
       title: 'Create note share',
@@ -963,7 +967,7 @@ export function createInkstoneMcpServer(options: InkstoneMcpServerOptions): McpS
     })),
   )
 
-  server.registerTool(
+  if (canWrite) server.registerTool(
     'revoke_note_share',
     {
       title: 'Revoke note share',
